@@ -157,6 +157,8 @@ const QC_MIN_FINDINGS_SMALL = 3;
 const QC_MIN_CLAUSE_CARDS = 3;
 const QC_MIN_FIELD_LENGTH = 20;
 const QC_MIN_REPORT_JSON_LENGTH = 4000;
+const QC_SMALL_DOC_CHAR_THRESHOLD = 8000;
+const QC_RETRY_JSON_CAP = 30_000;
 
 interface QualityResult {
   ok: boolean;
@@ -219,6 +221,18 @@ function validateReportQuality(
     if (jsonLen < QC_MIN_REPORT_JSON_LENGTH) {
       issues.push(
         `Report JSON too short (${jsonLen} chars, expected >= ${QC_MIN_REPORT_JSON_LENGTH}).`,
+      );
+    }
+  }
+
+  if (report.findings.length >= 3) {
+    const whys = report.findings.map((f) => f.shortWhy.toLowerCase().trim());
+    const counts = new Map<string, number>();
+    for (const w of whys) counts.set(w, (counts.get(w) ?? 0) + 1);
+    const dupes = [...counts.values()].filter((n) => n >= 3);
+    if (dupes.length > 0) {
+      issues.push(
+        "Findings appear repetitive; increase specificity.",
       );
     }
   }
@@ -299,33 +313,60 @@ export async function runReportAnalysis(
 
   const maxRetries =
     parseInt(process.env.PLAINTERMS_LLM_MAX_RETRIES ?? "1", 10) || 1;
-  const isSmallDoc = input.chunkCount <= 1;
+  const inputCharCount = chunksToSend.reduce((s, c) => s + c.length, 0);
+  const isSmallDoc =
+    inputCharCount < QC_SMALL_DOC_CHAR_THRESHOLD && !isPartial;
   const quality = validateReportQuality(report, isSmallDoc);
 
   if (!quality.ok && maxRetries > 0) {
     console.log("[llm] quality gate failed, retrying", {
       issueCount: quality.issues.length,
       issues: quality.issues,
+      isSmallDoc,
+      inputCharCount,
     });
 
-    const revisionContent =
-      `The previous report had quality issues. Fix them and return ONLY the revised JSON (same schema).\n\n` +
-      `Issues:\n${quality.issues.map((i) => `- ${i}`).join("\n")}\n\n` +
-      `Improve specificity, add grounded excerpts from the document, avoid boilerplate, ` +
-      `tailor letter templates to the actual findings, and label uncertain points as "Needs confirmation".\n\n` +
-      `Previous report JSON:\n${responseText}`;
+    const issueBlock =
+      `Issues:\n${quality.issues.map((i) => `- ${i}`).join("\n")}`;
+
+    let revisionContent: string;
+    if (responseText.length > QC_RETRY_JSON_CAP) {
+      revisionContent =
+        `The previous report had quality issues. Fix them and return ONLY the revised JSON (same schema).\n\n` +
+        `${issueBlock}\n\n` +
+        `Previous report summary: ${report.findings.length} findings, ${report.clauseCards.length} clause cards.\n` +
+        `Previous JSON omitted due to length; regenerate a corrected report from the document while preserving the schema.\n\n` +
+        `Improve specificity, add grounded excerpts from the document, avoid boilerplate, ` +
+        `tailor letter templates to the actual findings, and label uncertain points as "Needs confirmation".`;
+    } else {
+      revisionContent =
+        `The previous report had quality issues. Fix them and return ONLY the revised JSON (same schema).\n\n` +
+        `${issueBlock}\n\n` +
+        `Improve specificity, add grounded excerpts from the document, avoid boilerplate, ` +
+        `tailor letter templates to the actual findings, and label uncertain points as "Needs confirmation".\n\n` +
+        `Previous report JSON:\n${responseText}`;
+    }
+
+    const retryMessages: OpenAI.ChatCompletionMessageParam[] =
+      responseText.length > QC_RETRY_JSON_CAP
+        ? [
+            { role: "system", content: systemContent },
+            { role: "user", content: userContent },
+            { role: "user", content: revisionContent },
+          ]
+        : [
+            { role: "system", content: systemContent },
+            { role: "user", content: userContent },
+            { role: "assistant", content: responseText },
+            { role: "user", content: revisionContent },
+          ];
 
     const retryCompletion = await client.chat.completions.create({
       model: MODEL,
       temperature: TEMPERATURE,
       max_tokens: MAX_OUTPUT_TOKENS,
       response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemContent },
-        { role: "user", content: userContent },
-        { role: "assistant", content: responseText },
-        { role: "user", content: revisionContent },
-      ],
+      messages: retryMessages,
     });
 
     const retryText = retryCompletion.choices[0]?.message?.content;
