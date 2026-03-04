@@ -152,6 +152,80 @@ function buildLocaleInstruction(locale?: string): string {
   return `\nUse terminology and legal references appropriate for ${country} jurisdiction.`;
 }
 
+const QC_MIN_FINDINGS_LARGE = 5;
+const QC_MIN_FINDINGS_SMALL = 3;
+const QC_MIN_CLAUSE_CARDS = 3;
+const QC_MIN_FIELD_LENGTH = 20;
+const QC_MIN_REPORT_JSON_LENGTH = 4000;
+
+interface QualityResult {
+  ok: boolean;
+  issues: string[];
+}
+
+function validateReportQuality(
+  report: Report,
+  isSmallDoc: boolean,
+): QualityResult {
+  const issues: string[] = [];
+
+  const minFindings = isSmallDoc ? QC_MIN_FINDINGS_SMALL : QC_MIN_FINDINGS_LARGE;
+  if (report.findings.length < minFindings) {
+    issues.push(
+      `Too few findings (${report.findings.length}, expected >= ${minFindings}).`,
+    );
+  }
+
+  const shallowFindings = report.findings.filter(
+    (f) => f.shortWhy.length < QC_MIN_FIELD_LENGTH,
+  );
+  if (shallowFindings.length > 0) {
+    issues.push(
+      `${shallowFindings.length} finding(s) have shallow shortWhy (< ${QC_MIN_FIELD_LENGTH} chars).`,
+    );
+  }
+
+  if (report.clauseCards.length < QC_MIN_CLAUSE_CARDS) {
+    issues.push(
+      `Too few clause cards (${report.clauseCards.length}, expected >= ${QC_MIN_CLAUSE_CARDS}).`,
+    );
+  }
+
+  const shallowExcerpts = report.clauseCards.filter(
+    (c) => c.originalTextExcerpt.length < QC_MIN_FIELD_LENGTH,
+  );
+  if (shallowExcerpts.length > 0) {
+    issues.push(
+      `${shallowExcerpts.length} clause card(s) have shallow originalTextExcerpt.`,
+    );
+  }
+
+  const templates = report.actions.letterTemplates;
+  if (templates.length === 1 && report.findings.length > 2) {
+    const lower = templates[0].title.toLowerCase();
+    if (
+      lower.includes("cancel") ||
+      lower.includes("withdrawal") ||
+      lower.includes("termination")
+    ) {
+      issues.push(
+        "Only letter template is cancellation-oriented despite multiple findings.",
+      );
+    }
+  }
+
+  if (!isSmallDoc) {
+    const jsonLen = JSON.stringify(report).length;
+    if (jsonLen < QC_MIN_REPORT_JSON_LENGTH) {
+      issues.push(
+        `Report JSON too short (${jsonLen} chars, expected >= ${QC_MIN_REPORT_JSON_LENGTH}).`,
+      );
+    }
+  }
+
+  return { ok: issues.length === 0, issues };
+}
+
 export async function runReportAnalysis(
   input: AnalysisInput,
 ): Promise<Report> {
@@ -221,7 +295,50 @@ export async function runReportAnalysis(
     chunksSent: chunksToSend.length,
   });
 
-  const report = parseReportJson(responseText);
+  let report = parseReportJson(responseText);
+
+  const maxRetries =
+    parseInt(process.env.PLAINTERMS_LLM_MAX_RETRIES ?? "1", 10) || 1;
+  const isSmallDoc = input.chunkCount <= 1;
+  const quality = validateReportQuality(report, isSmallDoc);
+
+  if (!quality.ok && maxRetries > 0) {
+    console.log("[llm] quality gate failed, retrying", {
+      issueCount: quality.issues.length,
+      issues: quality.issues,
+    });
+
+    const revisionContent =
+      `The previous report had quality issues. Fix them and return ONLY the revised JSON (same schema).\n\n` +
+      `Issues:\n${quality.issues.map((i) => `- ${i}`).join("\n")}\n\n` +
+      `Improve specificity, add grounded excerpts from the document, avoid boilerplate, ` +
+      `tailor letter templates to the actual findings, and label uncertain points as "Needs confirmation".\n\n` +
+      `Previous report JSON:\n${responseText}`;
+
+    const retryCompletion = await client.chat.completions.create({
+      model: MODEL,
+      temperature: TEMPERATURE,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemContent },
+        { role: "user", content: userContent },
+        { role: "assistant", content: responseText },
+        { role: "user", content: revisionContent },
+      ],
+    });
+
+    const retryText = retryCompletion.choices[0]?.message?.content;
+    if (retryText) {
+      const retryTokens = retryCompletion.usage?.total_tokens ?? 0;
+      console.log("[llm] retry completed", { retryTokens });
+      try {
+        report = parseReportJson(retryText);
+      } catch {
+        console.log("[llm] retry parse failed, using original report");
+      }
+    }
+  }
 
   report.id = "generated";
   report.createdAtISO = new Date().toISOString();
