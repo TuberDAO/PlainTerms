@@ -54,7 +54,7 @@ test("upload PDF, analyze, generate report, view report page", async ({
   await expect(analyzeBtn).toBeEnabled();
   await analyzeBtn.click();
 
-  const parsedPanel = page.getByText(/parsed .* characters/i);
+  const parsedPanel = page.getByText(/document imported and ready/i);
   await expect(parsedPanel).toBeVisible({ timeout: 15_000 });
 
   const generateBtn = page.getByRole("button", { name: /generate report/i });

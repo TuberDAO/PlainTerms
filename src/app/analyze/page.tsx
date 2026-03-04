@@ -4,7 +4,16 @@ import { useState, Suspense, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { FileText, Upload, LogIn, X, Loader2, Eye } from "lucide-react";
+import {
+  FileText,
+  Upload,
+  LogIn,
+  X,
+  Loader2,
+  Eye,
+  ChevronDown,
+  CheckCircle2,
+} from "lucide-react";
 import { track } from "@/lib/analytics/tracker";
 import { useLocale } from "@/lib/locale/context";
 import { createBrowserClient } from "@/lib/supabase/client";
@@ -34,7 +43,29 @@ function AnalyzeContent() {
   const [ingestResult, setIngestResult] = useState<IngestResult | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [audienceChoice, setAudienceChoice] = useState("");
+  const [audienceCustom, setAudienceCustom] = useState("");
+  const [jurisdictionChoice, setJurisdictionChoice] = useState("");
+  const [jurisdictionCustom, setJurisdictionCustom] = useState("");
+  const [contractTypeChoice, setContractTypeChoice] = useState("");
+  const [contractTypeCustom, setContractTypeCustom] = useState("");
+  const [showTechDetails, setShowTechDetails] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const audienceContext =
+    audienceChoice === "other"
+      ? audienceCustom.trim()
+      : audienceChoice || undefined;
+
+  const jurisdictionContext =
+    jurisdictionChoice === "other"
+      ? jurisdictionCustom.trim()
+      : jurisdictionChoice || undefined;
+
+  const contractTypeHint =
+    contractTypeChoice === "other"
+      ? contractTypeCustom.trim()
+      : contractTypeChoice || undefined;
 
   function handleFileSelect(selected: File | undefined) {
     if (!selected) return;
@@ -184,6 +215,9 @@ function AnalyzeContent() {
             title: payload.title,
           },
           locale,
+          audienceContext: audienceContext || undefined,
+          jurisdictionContext: jurisdictionContext || undefined,
+          contractTypeHint: contractTypeHint || undefined,
         }),
       });
 
@@ -323,16 +357,15 @@ function AnalyzeContent() {
 
             {/* Ingest success panel */}
             {ingestResult && (
-              <div className="mt-5 rounded-lg border border-border bg-muted/50 px-4 py-3">
+              <div className="mt-5 rounded-lg border border-border bg-muted/50 px-4 py-4">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium">
-                    Parsed {ingestResult.charCount.toLocaleString()} characters
-                    &bull; {ingestResult.chunkCount} chunk
-                    {ingestResult.chunkCount !== 1 && "s"}
-                    {ingestResult.isTruncated && (
-                      <span className="ml-1 text-amber-600">(truncated)</span>
-                    )}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <p className="text-sm font-medium">
+                      Document imported and ready for your PlainTerms
+                      report.
+                    </p>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setIngestResult(null)}
@@ -341,12 +374,184 @@ function AnalyzeContent() {
                     Clear
                   </button>
                 </div>
-                {ingestResult.chunks[0] && (
-                  <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">
-                    {ingestResult.chunks[0].slice(0, 300)}
-                    {ingestResult.chunks[0].length > 300 && "..."}
-                  </p>
+                <p className="mt-1 pl-6 text-xs text-muted-foreground">
+                  Next: Generate report.
+                  {ingestResult.isTruncated && (
+                    <span className="ml-1 text-amber-600">
+                      (Document was truncated to fit processing limits.)
+                    </span>
+                  )}
+                </p>
+
+                {/* Collapsible technical details */}
+                <button
+                  type="button"
+                  onClick={() => setShowTechDetails((v) => !v)}
+                  className="mt-2 flex items-center gap-1 pl-6 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronDown
+                    className={`h-3 w-3 transition-transform ${showTechDetails ? "rotate-180" : ""}`}
+                  />
+                  View technical details
+                </button>
+                {showTechDetails && (
+                  <div className="mt-1.5 rounded bg-muted/60 px-3 py-2 ml-6">
+                    <p className="text-xs text-muted-foreground">
+                      {ingestResult.charCount.toLocaleString()} characters
+                      &bull; {ingestResult.chunkCount} chunk
+                      {ingestResult.chunkCount !== 1 && "s"}
+                      &bull; type: {ingestResult.sourceType}
+                    </p>
+                    {ingestResult.chunks[0] && (
+                      <p className="mt-1 line-clamp-3 text-xs text-muted-foreground/70">
+                        {ingestResult.chunks[0].slice(0, 300)}
+                        {ingestResult.chunks[0].length > 300 && "..."}
+                      </p>
+                    )}
+                  </div>
                 )}
+
+                {/* Context selectors */}
+                <div className="mt-4 space-y-3 pl-6">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      Who is this for? (optional)
+                    </label>
+                    <select
+                      value={audienceChoice}
+                      onChange={(e) => {
+                        setAudienceChoice(e.target.value);
+                        if (e.target.value !== "other")
+                          setAudienceCustom("");
+                      }}
+                      className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    >
+                      <option value="">Skip — general analysis</option>
+                      <option value="General consumer">
+                        General consumer
+                      </option>
+                      <option value="Senior / retired">
+                        Senior / retired
+                      </option>
+                      <option value="Family with kids">
+                        Family with kids
+                      </option>
+                      <option value="Small business owner">
+                        Small business owner
+                      </option>
+                      <option value="other">Other (free text)</option>
+                    </select>
+                    {audienceChoice === "other" && (
+                      <input
+                        type="text"
+                        value={audienceCustom}
+                        onChange={(e) => setAudienceCustom(e.target.value)}
+                        placeholder="e.g. freelancer, student, landlord..."
+                        className="mt-1.5 block w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                        maxLength={100}
+                      />
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      Where does this contract apply? (optional)
+                    </label>
+                    <select
+                      value={jurisdictionChoice}
+                      onChange={(e) => {
+                        setJurisdictionChoice(e.target.value);
+                        if (e.target.value !== "other")
+                          setJurisdictionCustom("");
+                      }}
+                      className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    >
+                      <option value="">Skip — auto-detect</option>
+                      <option value="United Kingdom">
+                        United Kingdom
+                      </option>
+                      <option value="United States">United States</option>
+                      <option value="Canada">Canada</option>
+                      <option value="Australia">Australia</option>
+                      <option value="European Union">
+                        European Union
+                      </option>
+                      <option value="other">Other (free text)</option>
+                    </select>
+                    {jurisdictionChoice === "other" && (
+                      <>
+                        <input
+                          type="text"
+                          value={jurisdictionCustom}
+                          onChange={(e) =>
+                            setJurisdictionCustom(e.target.value)
+                          }
+                          placeholder="e.g., Singapore, New York, Germany"
+                          className="mt-1.5 block w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                          maxLength={100}
+                        />
+                        <p className="mt-1 text-xs text-muted-foreground/60">
+                          If you know the country (and state/province),
+                          the report can be more accurate.
+                        </p>
+                      </>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      What type of contract is this? (optional)
+                    </label>
+                    <select
+                      value={contractTypeChoice}
+                      onChange={(e) => {
+                        setContractTypeChoice(e.target.value);
+                        if (e.target.value !== "other")
+                          setContractTypeCustom("");
+                      }}
+                      className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    >
+                      <option value="">Skip — auto-detect</option>
+                      <option value="Health insurance">
+                        Health insurance
+                      </option>
+                      <option value="Home insurance">Home insurance</option>
+                      <option value="Car insurance">Car insurance</option>
+                      <option value="Travel insurance">
+                        Travel insurance
+                      </option>
+                      <option value="Mobile phone plan">
+                        Mobile phone plan
+                      </option>
+                      <option value="Consumer loan / BNPL / credit">
+                        Consumer loan / BNPL / credit
+                      </option>
+                      <option value="Gym / subscription membership">
+                        Gym / subscription membership
+                      </option>
+                      <option value="Commercial lease">
+                        Commercial lease
+                      </option>
+                      <option value="Cyber insurance">
+                        Cyber insurance
+                      </option>
+                      <option value="other">Other (free text)</option>
+                    </select>
+                    {contractTypeChoice === "other" && (
+                      <input
+                        type="text"
+                        value={contractTypeCustom}
+                        onChange={(e) =>
+                          setContractTypeCustom(e.target.value)
+                        }
+                        placeholder="e.g., Solar PPA, Farm equipment lease"
+                        className="mt-1.5 block w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                        maxLength={100}
+                      />
+                    )}
+                  </div>
+                </div>
+
                 {generateError && (
                   <div
                     role="alert"
@@ -357,7 +562,7 @@ function AnalyzeContent() {
                 )}
                 <Button
                   size="sm"
-                  className="mt-3 gap-2"
+                  className="mt-4 ml-6 gap-2"
                   onClick={handleGenerateReport}
                   disabled={generating}
                 >
@@ -409,8 +614,8 @@ function AnalyzeContent() {
             </div>
 
             <p className="mt-5 text-center text-xs text-muted-foreground">
-              Free preview included. Your text is processed in real-time and
-              not stored. This is not legal advice.
+              Your report is saved to your account. Your original document
+              text is not stored. This is not legal advice.
             </p>
           </CardContent>
         </Card>

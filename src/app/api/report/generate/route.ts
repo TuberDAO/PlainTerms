@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { ingest, locale } = body;
+    const { ingest, locale, audienceContext, jurisdictionContext, contractTypeHint } = body;
 
     if (
       !ingest ||
@@ -35,6 +35,18 @@ export async function POST(request: NextRequest) {
       report = await runReportAnalysis({
         locale: locale ?? undefined,
         title: ingest.title ?? undefined,
+        audienceContext:
+          typeof audienceContext === "string" && audienceContext.trim()
+            ? audienceContext.trim()
+            : undefined,
+        jurisdictionContext:
+          typeof jurisdictionContext === "string" && jurisdictionContext.trim()
+            ? jurisdictionContext.trim()
+            : undefined,
+        contractTypeHint:
+          typeof contractTypeHint === "string" && contractTypeHint.trim()
+            ? contractTypeHint.trim()
+            : undefined,
         chunks: ingest.chunks,
         chunkCount: ingest.chunkCount ?? ingest.chunks.length,
         fingerprint: ingest.fingerprint,
