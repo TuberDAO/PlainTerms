@@ -5,7 +5,11 @@ import type { Report } from "@/types/report";
 import { anthropicGenerateText } from "./anthropic";
 
 const MAX_CHUNKS = 8;
-const MODEL = "gpt-4o-mini";
+const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+
+function getOpenAIModel(): string {
+  return process.env.PLAINTERMS_OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+}
 const MAX_OUTPUT_TOKENS = 8192;
 const TEMPERATURE = 0.3;
 
@@ -236,9 +240,10 @@ async function callOpenAI(
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
+  const model = getOpenAIModel();
   const client = new OpenAI({ apiKey, maxRetries: 2 });
   const completion = await client.chat.completions.create({
-    model: MODEL,
+    model,
     temperature: TEMPERATURE,
     max_tokens: MAX_OUTPUT_TOKENS,
     response_format: { type: "json_object" },
@@ -246,6 +251,11 @@ async function callOpenAI(
   });
   const text = completion.choices[0]?.message?.content;
   if (!text) throw new Error("Empty response from OpenAI.");
+  console.log("[llm]", {
+    backend: "openai",
+    model,
+    tokens: completion.usage?.total_tokens ?? 0,
+  });
   return text;
 }
 
