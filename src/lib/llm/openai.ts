@@ -135,8 +135,8 @@ OUTPUT SCHEMA — return a JSON object with exactly these fields:
 }
 
 GUIDELINES:
-- Produce 3-10 findings sorted by severity (most severe first).
-- Produce a corresponding clauseCard for each finding's related clause.
+- Produce a MINIMUM of 3 findings (up to 10), sorted by severity (most severe first). Even short documents have multiple angles worth examining — look for overlapping risks, hidden interactions between clauses, and consumer-unfriendly defaults.
+- Produce a MINIMUM of 3 clauseCards. Each finding's related clause must have a corresponding clauseCard.
 - Use the tags taxonomy accurately — only use tags that genuinely apply.
 - Produce 2-5 recommended questions specific to this document's actual issues.
 - crossClauseCombos on clauseCards are optional — include only when two clauses genuinely interact to create a compounding risk.`;
@@ -172,6 +172,63 @@ function extractJson(raw: string): string {
   const last = raw.lastIndexOf("}");
   if (first !== -1 && last > first) return raw.slice(first, last + 1);
   return raw;
+}
+
+const VALID_CONTRACT_FAMILIES = new Set([
+  "insurance", "leases", "contracts", "finance",
+  "employment", "telecom", "gym", "cloud-services",
+]);
+
+function normalizeContractFamily(val: unknown): string {
+  if (typeof val === "string" && VALID_CONTRACT_FAMILIES.has(val)) return val;
+  const s = String(val ?? "").toLowerCase();
+  if (s.includes("insurance") || s.includes("pmi") || s.includes("health")) return "insurance";
+  if (s.includes("lease") || s.includes("rent")) return "leases";
+  if (s.includes("financ") || s.includes("loan") || s.includes("bnpl") || s.includes("credit")) return "finance";
+  if (s.includes("employ") || s.includes("work")) return "employment";
+  if (s.includes("telecom") || s.includes("mobile") || s.includes("phone")) return "telecom";
+  if (s.includes("gym") || s.includes("fitness") || s.includes("membership")) return "gym";
+  if (s.includes("cloud") || s.includes("saas") || s.includes("software")) return "cloud-services";
+  return "contracts";
+}
+
+function patchReportDefaults(raw: string): string {
+  try {
+    const obj = JSON.parse(raw);
+    if (obj.paywalledFindingsCount === undefined) obj.paywalledFindingsCount = 0;
+    if (obj.isPreview === undefined) obj.isPreview = false;
+    if (!obj.id) obj.id = "generated";
+    if (!obj.createdAtISO) obj.createdAtISO = new Date().toISOString();
+    obj.contractFamily = normalizeContractFamily(obj.contractFamily);
+
+    if (Array.isArray(obj.actions?.letterTemplates)) {
+      for (let i = 0; i < obj.actions.letterTemplates.length; i++) {
+        const t = obj.actions.letterTemplates[i];
+        if (!t.id) t.id = t.templateId ?? `lt-${i + 1}`;
+        if (!t.title) t.title = t.name ?? t.subject ?? t.templateType ?? t.intent ?? `Letter ${i + 1}`;
+        if (!t.body) t.body = t.content ?? t.text ?? t.template ?? "";
+      }
+    }
+    if (Array.isArray(obj.findings)) {
+      for (let i = 0; i < obj.findings.length; i++) {
+        const f = obj.findings[i];
+        if (!f.id) f.id = `f-${i + 1}`;
+        if (!Array.isArray(f.tags)) f.tags = [];
+        if (!Array.isArray(f.relatedClauseIds)) f.relatedClauseIds = [];
+      }
+    }
+    if (Array.isArray(obj.clauseCards)) {
+      for (let i = 0; i < obj.clauseCards.length; i++) {
+        const c = obj.clauseCards[i];
+        if (!c.clauseId) c.clauseId = `c-${i + 1}`;
+        if (!Array.isArray(c.whatToDo)) c.whatToDo = [];
+      }
+    }
+
+    return JSON.stringify(obj);
+  } catch {
+    return raw;
+  }
 }
 
 async function callOpenAI(
@@ -333,7 +390,7 @@ export async function runReportAnalysis(
     chunksSent: chunksToSend.length,
   });
 
-  let report = parseReportJson(responseText);
+  let report = parseReportJson(patchReportDefaults(responseText));
 
   const maxRetries =
     parseInt(process.env.PLAINTERMS_LLM_MAX_RETRIES ?? "1", 10) || 1;
@@ -353,6 +410,13 @@ export async function runReportAnalysis(
     const issueBlock =
       `Issues:\n${quality.issues.map((i) => `- ${i}`).join("\n")}`;
 
+    const revisionRules =
+      `CRITICAL: Output ONLY a single JSON object. No markdown, no code fences, no explanations, no text before or after the JSON.\n` +
+      `Use the previous JSON as the base. Keep the EXACT same field names (camelCase). Do not rename or remove any required fields. Only expand or add items to satisfy the issues listed above.\n` +
+      `Minimum targets: at least 3 objects in "findings", at least 3 objects in "clauseCards", each with all required fields populated.\n` +
+      `Improve specificity, add grounded excerpts from the document, avoid boilerplate, ` +
+      `tailor letter templates to the actual findings, and label uncertain points as "Needs confirmation".`;
+
     let revisionContent: string;
     if (responseText.length > QC_RETRY_JSON_CAP) {
       revisionContent =
@@ -360,14 +424,12 @@ export async function runReportAnalysis(
         `${issueBlock}\n\n` +
         `Previous report summary: ${report.findings.length} findings, ${report.clauseCards.length} clause cards.\n` +
         `Previous JSON omitted due to length; regenerate a corrected report from the document while preserving the schema.\n\n` +
-        `Improve specificity, add grounded excerpts from the document, avoid boilerplate, ` +
-        `tailor letter templates to the actual findings, and label uncertain points as "Needs confirmation".`;
+        revisionRules;
     } else {
       revisionContent =
         `The previous report had quality issues. Fix them and return ONLY the revised JSON (same schema).\n\n` +
         `${issueBlock}\n\n` +
-        `Improve specificity, add grounded excerpts from the document, avoid boilerplate, ` +
-        `tailor letter templates to the actual findings, and label uncertain points as "Needs confirmation".\n\n` +
+        revisionRules + `\n\n` +
         `Previous report JSON:\n${responseText}`;
     }
 
@@ -406,10 +468,36 @@ export async function runReportAnalysis(
 
     if (retryRaw) {
       console.log("[llm] retry completed");
+      const retryExtracted = extractJson(retryRaw);
       try {
-        report = parseReportJson(extractJson(retryRaw));
-      } catch {
-        console.log("[llm] retry parse failed, using original report");
+        report = parseReportJson(patchReportDefaults(retryExtracted));
+      } catch (err: unknown) {
+        const isZod =
+          err != null &&
+          typeof err === "object" &&
+          "issues" in err &&
+          Array.isArray(
+            (err as { issues: unknown[] }).issues,
+          );
+        let reason = "unknown";
+        if (isZod) {
+          const issues = (
+            err as {
+              issues: { path: (string | number)[]; message: string }[];
+            }
+          ).issues;
+          reason =
+            issues.length > 0
+              ? `${issues[0].path.join(".")}: ${issues[0].message}`
+              : "zod validation failed";
+        } else if (err instanceof SyntaxError) {
+          reason = "invalid JSON";
+        }
+        console.log("[llm] retry parse failed, using original report", {
+          errorType: isZod ? "zod" : "json",
+          extractedLength: retryExtracted.length,
+          reason,
+        });
       }
     }
   }
