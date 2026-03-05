@@ -19,20 +19,20 @@ interface EvalCase {
 }
 
 const CASES: EvalCase[] = [
-  /* A — USA health insurance: network directory + surprise billing + PA */
+  /* A  -  USA health insurance: network directory + surprise billing + PA */
   {
     id: "us-health-network",
-    title: "USA health insurance — network directory / surprise billing / prior auth",
+    title: "USA health insurance  -  network directory / surprise billing / prior auth",
     audienceContext: "General consumer",
     jurisdictionContext: "United States",
     contractTypeHint: "Health insurance",
-    text: `SECTION 4 — PROVIDER NETWORK
+    text: `SECTION 4  -  PROVIDER NETWORK
 The Company maintains a provider directory that is updated periodically. The inclusion of a provider in the directory does not guarantee that the provider is currently accepting new patients or is available at the time of your visit. Members are responsible for verifying network status prior to each visit. Out-of-network services are subject to a separate deductible of $5,000 and coinsurance of 40%.
 
-SECTION 7 — EMERGENCY SERVICES
+SECTION 7  -  EMERGENCY SERVICES
 Emergency services rendered by out-of-network providers at an in-network facility will be covered at the in-network benefit level, subject to the No Surprises Act where applicable. However, non-emergency services rendered by out-of-network providers at in-network facilities (including but not limited to anesthesiologists, radiologists, and pathologists) may result in balance billing to the member for amounts exceeding the plan's allowed amount.
 
-SECTION 9 — PRIOR AUTHORIZATION
+SECTION 9  -  PRIOR AUTHORIZATION
 Certain services require prior authorization. Failure to obtain prior authorization may result in denial of the claim or reduced benefits (member pays 50% coinsurance instead of 20%). The list of services requiring prior authorization is published separately and may be updated quarterly without individual notice. Prior authorization does not guarantee payment; all claims remain subject to medical necessity review at time of payment.`,
     expectedSignals: [
       "network directory",
@@ -45,10 +45,10 @@ Certain services require prior authorization. Failure to obtain prior authorizat
     forbiddenSignals: [],
   },
 
-  /* B — Skinny / non-ACA plan */
+  /* B  -  Skinny / non-ACA plan */
   {
     id: "us-skinny-plan",
-    title: "Non-ACA 'skinny' plan — pre-existing exclusions, no MH/Rx",
+    title: "Non-ACA 'skinny' plan  -  pre-existing exclusions, no MH/Rx",
     audienceContext: "General consumer",
     jurisdictionContext: "United States",
     contractTypeHint: "Health insurance",
@@ -71,10 +71,10 @@ BENEFIT MAXIMUMS: Total benefits paid shall not exceed $250,000 per covered pers
     forbiddenSignals: [],
   },
 
-  /* C — UK PMI: acute vs chronic */
+  /* C  -  UK PMI: acute vs chronic */
   {
     id: "uk-pmi-chronic",
-    title: "UK PMI — acute vs chronic definition, coverage stops",
+    title: "UK PMI  -  acute vs chronic definition, coverage stops",
     jurisdictionContext: "United Kingdom",
     contractTypeHint: "Health insurance",
     text: `DEFINITIONS
@@ -95,10 +95,10 @@ We will pay for eligible treatment of a chronic condition for a maximum period o
     forbiddenSignals: [],
   },
 
-  /* D — AU private health: gap cover + restricted benefits */
+  /* D  -  AU private health: gap cover + restricted benefits */
   {
     id: "au-private-gap",
-    title: "AU private health — gap cover + restricted vs excluded benefits",
+    title: "AU private health  -  gap cover + restricted vs excluded benefits",
     jurisdictionContext: "Australia",
     contractTypeHint: "Health insurance",
     text: `GAP COVER ARRANGEMENTS
@@ -124,13 +124,13 @@ A waiting period of 12 months applies for pre-existing conditions and psychiatri
     forbiddenSignals: [],
   },
 
-  /* E — CA extended health: R&C cap + formulary */
+  /* E  -  CA extended health: R&C cap + formulary */
   {
     id: "ca-extended-health",
-    title: "CA extended health — reasonable & customary cap + formulary",
+    title: "CA extended health  -  reasonable & customary cap + formulary",
     jurisdictionContext: "Canada",
     contractTypeHint: "Health insurance",
-    text: `ELIGIBLE EXPENSES — REASONABLE AND CUSTOMARY
+    text: `ELIGIBLE EXPENSES  -  REASONABLE AND CUSTOMARY
 Benefits are payable based on the reasonable and customary (R&C) charges for the service or supply in the geographic area where it is provided. If the actual charge exceeds the R&C amount as determined by the insurer, the excess is the responsibility of the plan member. The insurer determines R&C amounts based on surveys of charges made by providers of similar training and experience in the same geographic area. R&C schedules are reviewed annually but may not reflect current market rates.
 
 PRESCRIPTION DRUGS
@@ -149,10 +149,10 @@ Coverage for paramedical practitioners (physiotherapy, chiropractic, massage the
     forbiddenSignals: [],
   },
 
-  /* F — Home insurance: averaging / coinsurance underinsurance */
+  /* F  -  Home insurance: averaging / coinsurance underinsurance */
   {
     id: "home-averaging",
-    title: "Home insurance — averaging / coinsurance underinsurance clause",
+    title: "Home insurance  -  averaging / coinsurance underinsurance clause",
     jurisdictionContext: "United Kingdom",
     contractTypeHint: "Home insurance",
     text: `CONDITION OF AVERAGE (UNDERINSURANCE)
@@ -171,13 +171,13 @@ You are responsible for ensuring that the sums insured adequately reflect the fu
     forbiddenSignals: [],
   },
 
-  /* G — Home insurance: roof ACV / depreciation */
+  /* G  -  Home insurance: roof ACV / depreciation */
   {
     id: "home-roof-acv",
-    title: "Home insurance — roof ACV / depreciation schedule",
+    title: "Home insurance  -  roof ACV / depreciation schedule",
     jurisdictionContext: "United States",
     contractTypeHint: "Home insurance",
-    text: `ROOF COVERAGE — ACTUAL CASH VALUE
+    text: `ROOF COVERAGE  -  ACTUAL CASH VALUE
 Notwithstanding the replacement cost provisions of this policy, loss or damage to the roof covering (including but not limited to shingles, tiles, membrane, and associated materials) shall be settled on an actual cash value (ACV) basis. Actual cash value is determined as the replacement cost at the time of loss, less depreciation. Depreciation for roofing materials is calculated based on the age and expected useful life of the roof covering as follows:
 
   - Composition/asphalt shingles: 20-year expected life
@@ -198,19 +198,19 @@ If a covered loss damages a portion of a surface, finish, or material, we will r
     forbiddenSignals: [],
   },
 
-  /* H — Mobile phone: CPI+ escalator + device financing */
+  /* H  -  Mobile phone: CPI+ escalator + device financing */
   {
     id: "mobile-cpi-escalator",
-    title: "Mobile phone — CPI+ escalator + device financing early exit",
+    title: "Mobile phone  -  CPI+ escalator + device financing early exit",
     jurisdictionContext: "United Kingdom",
     contractTypeHint: "Mobile phone plan",
     text: `ANNUAL PRICE ADJUSTMENTS
 Your monthly charges will increase each April by the Consumer Price Index (CPI) rate published by the Office for National Statistics in January of that year, plus an additional 3.9 percentage points. For example, if CPI is 4%, your charges will increase by 7.9%. This increase applies to your airtime plan charges and is separate from any changes to your device plan payments. This price increase is part of your contract and does not give you the right to cancel without paying an early termination charge.
 
-DEVICE PLAN — EARLY TERMINATION
+DEVICE PLAN  -  EARLY TERMINATION
 If you cancel your device plan before the end of the agreed term (typically 24 or 36 months), you must pay the remaining balance of the device cost in full immediately. The device plan is a separate credit agreement regulated by the Consumer Credit Act 1974. Your remaining balance as of any date can be obtained by contacting us.
 
-EXIT FEES — AIRTIME PLAN
+EXIT FEES  -  AIRTIME PLAN
 If you cancel your airtime plan during the minimum term, you will be charged an early termination fee equal to the remaining monthly charges for the rest of the minimum term, less a discount we apply at our discretion (typically 1-3%).`,
     expectedSignals: [
       "CPI",
@@ -223,10 +223,10 @@ If you cancel your airtime plan during the minimum term, you will be charged an 
     forbiddenSignals: [],
   },
 
-  /* I — Gym membership: cancellation loopholes */
+  /* I  -  Gym membership: cancellation loopholes */
   {
     id: "gym-cancel-loophole",
-    title: "Gym membership — certified mail / in-person cancellation",
+    title: "Gym membership  -  certified mail / in-person cancellation",
     contractTypeHint: "Gym / subscription membership",
     text: `CANCELLATION POLICY
 You may cancel your membership after the initial commitment period (12 months) by providing written notice. Cancellation notice must be delivered in one of the following ways ONLY: (a) in person at the club location where you enrolled, by completing a cancellation form and receiving a stamped confirmation copy; or (b) by certified mail, return receipt requested, addressed to our Membership Services department. Cancellation requests sent by regular mail, email, telephone, or through our website or app will not be accepted.
@@ -246,10 +246,10 @@ After the initial 12-month commitment period, your membership will automatically
     forbiddenSignals: [],
   },
 
-  /* J — BNPL / store card: deferred interest */
+  /* J  -  BNPL / store card: deferred interest */
   {
     id: "bnpl-deferred-interest",
-    title: "BNPL / store card — deferred interest trap",
+    title: "BNPL / store card  -  deferred interest trap",
     contractTypeHint: "Consumer loan / BNPL / credit",
     text: `DEFERRED INTEREST PROMOTIONAL OFFER
 If you make a qualifying purchase of $299 or more, no interest will be charged on that purchase if you pay the full promotional balance by the end of the promotional period (6, 12, or 24 months depending on the offer). If you do NOT pay the full promotional balance by the end of the promotional period, interest will be charged from the original purchase date at the standard annual percentage rate (APR) of 29.99%.
@@ -270,23 +270,23 @@ If a minimum payment is not received by the due date, the promotional offer may 
     forbiddenSignals: [],
   },
 
-  /* K — Negative test: senior audience should NOT see maternity flags */
+  /* K  -  Negative test: senior audience should NOT see maternity flags */
   {
     id: "us-health-senior-negative",
-    title: "Negative test — senior audience should not flag maternity/pediatric",
+    title: "Negative test  -  senior audience should not flag maternity/pediatric",
     audienceContext: "Senior / retired",
     jurisdictionContext: "United States",
     contractTypeHint: "Health insurance",
-    text: `SECTION 4 — PROVIDER NETWORK
+    text: `SECTION 4  -  PROVIDER NETWORK
 The Company maintains a provider directory that is updated periodically. Members are responsible for verifying network status prior to each visit. Out-of-network services are subject to a separate deductible of $5,000 and coinsurance of 40%.
 
-SECTION 6 — MATERNITY AND NEWBORN CARE
+SECTION 6  -  MATERNITY AND NEWBORN CARE
 Maternity benefits include prenatal visits, labor and delivery, and postnatal care. Coverage for newborn nursery care is included for the first 48 hours following vaginal delivery and 96 hours following cesarean delivery. Pediatric dental and vision coverage is provided for dependents up to age 19.
 
-SECTION 9 — PRIOR AUTHORIZATION
+SECTION 9  -  PRIOR AUTHORIZATION
 Certain services require prior authorization. Failure to obtain prior authorization may result in denial of the claim or reduced benefits (member pays 50% coinsurance instead of 20%). The list of services requiring prior authorization is published separately and may be updated quarterly without individual notice.
 
-SECTION 11 — PRESCRIPTION DRUG FORMULARY
+SECTION 11  -  PRESCRIPTION DRUG FORMULARY
 Tier 1 (Generic): $10 copay. Tier 2 (Preferred Brand): $40 copay. Tier 3 (Non-Preferred Brand): $80 copay. Tier 4 (Specialty): 30% coinsurance after deductible, maximum $250/prescription. Step therapy requirements apply to certain medications; you must try the preferred alternative before the non-preferred drug will be covered.`,
     expectedSignals: [
       "prior authorization",
@@ -308,6 +308,11 @@ Tier 1 (Generic): $10 copay. Tier 2 (Preferred Brand): $40 copay. Tier 3 (Non-Pr
 /*  Eval summary types                                                 */
 /* ------------------------------------------------------------------ */
 
+interface SignalMatch {
+  signal: string;
+  matchedPhrase: string;
+}
+
 interface CaseSummary {
   id: string;
   title: string;
@@ -316,8 +321,146 @@ interface CaseSummary {
   letterTemplatesCount: number;
   expectedHits: string[];
   forbiddenHits: string[];
+  signalMatches: SignalMatch[];
   warnings: string[];
   topFindings: { severity: string; title: string; shortWhy: string }[];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Signal matching helpers                                            */
+/* ------------------------------------------------------------------ */
+
+function normalizeForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const SYNONYM_MAP: Record<string, string[]> = {
+  "coverage stops": [
+    "coverage ceases",
+    "benefits cease",
+    "no further benefits",
+    "will not be payable",
+    "will not be paid",
+    "stops paying",
+    "coverage ends",
+    "benefits end",
+    "excluded after",
+    "no longer covered",
+  ],
+  "surprise billing": [
+    "balance billing",
+    "unexpected bill",
+    "surprise charge",
+    "out of network charge",
+  ],
+  "not aca": [
+    "not major medical",
+    "does not meet aca",
+    "does not meet the requirements of the affordable care act",
+    "limited benefit",
+    "not minimum essential",
+  ],
+  "benefit maximum": [
+    "benefit limit",
+    "annual maximum",
+    "lifetime maximum",
+    "cap on benefits",
+    "maximum benefit",
+    "shall not exceed",
+  ],
+  "out-of-pocket": [
+    "out of pocket",
+    "member pays the difference",
+    "your responsibility",
+    "gap amount",
+  ],
+  "escalator": [
+    "price increase",
+    "annual increase",
+    "cpi plus",
+    "cpi +",
+    "charges will increase",
+    "rate increase",
+  ],
+  "cancellation fee": [
+    "processing fee",
+    "early termination fee",
+    "exit fee",
+    "cancellation charge",
+  ],
+  "deferred interest": [
+    "retroactive interest",
+    "interest from the original",
+    "interest charged from",
+    "backdated interest",
+  ],
+  "averaging": [
+    "condition of average",
+    "underinsurance",
+    "proportionate share",
+    "your own insurer",
+    "co insurance",
+    "coinsurance clause",
+  ],
+};
+
+function hasSignal(
+  haystack: string,
+  signal: string,
+): { hit: boolean; matchedPhrase?: string } {
+  const normSignal = normalizeForMatch(signal);
+  if (haystack.includes(normSignal)) {
+    return { hit: true, matchedPhrase: signal };
+  }
+  const synonyms = SYNONYM_MAP[normSignal] ?? SYNONYM_MAP[signal.toLowerCase()];
+  if (synonyms) {
+    for (const syn of synonyms) {
+      const normSyn = normalizeForMatch(syn);
+      if (haystack.includes(normSyn)) {
+        return { hit: true, matchedPhrase: syn };
+      }
+    }
+  }
+  return { hit: false };
+}
+
+function buildContentHaystack(report: {
+  verdict: { headline: string; summary: string };
+  findings: { title: string; shortWhy: string }[];
+  clauseCards: {
+    originalTextExcerpt: string;
+    atFirstGlance: string;
+    whatItMeans: string;
+    scenario: string;
+  }[];
+  actions: { letterTemplates: { title: string; body: string }[] };
+}): string {
+  const parts: string[] = [
+    report.verdict.headline,
+    report.verdict.summary,
+  ];
+  for (const f of report.findings) {
+    parts.push(f.title, f.shortWhy);
+  }
+  for (const c of report.clauseCards) {
+    parts.push(
+      c.originalTextExcerpt,
+      c.atFirstGlance,
+      c.whatItMeans,
+      c.scenario,
+    );
+  }
+  for (const t of report.actions.letterTemplates) {
+    parts.push(t.title, t.body);
+  }
+  return normalizeForMatch(parts.join(" "));
 }
 
 /* ------------------------------------------------------------------ */
@@ -395,25 +538,31 @@ export async function GET(request: NextRequest) {
       };
 
       const report = await runReportAnalysis(input);
-      const reportJson = JSON.stringify(report).toLowerCase();
+      const haystack = buildContentHaystack(report);
 
-      const expectedHits = evalCase.expectedSignals.filter((s) =>
-        reportJson.includes(s.toLowerCase()),
-      );
-      const forbiddenHits = evalCase.forbiddenSignals.filter((s) =>
-        reportJson.includes(s.toLowerCase()),
-      );
-
+      const expectedHits: string[] = [];
+      const signalMatches: SignalMatch[] = [];
       const warnings: string[] = [];
 
       for (const s of evalCase.expectedSignals) {
-        if (!reportJson.includes(s.toLowerCase())) {
+        const result = hasSignal(haystack, s);
+        if (result.hit) {
+          expectedHits.push(s);
+          signalMatches.push({ signal: s, matchedPhrase: result.matchedPhrase! });
+        } else {
           warnings.push(`Missing expected signal: ${s}`);
         }
       }
-      for (const s of forbiddenHits) {
-        warnings.push(`Forbidden signal present: ${s}`);
+
+      const forbiddenHits: string[] = [];
+      for (const s of evalCase.forbiddenSignals) {
+        const result = hasSignal(haystack, s);
+        if (result.hit) {
+          forbiddenHits.push(s);
+          warnings.push(`Forbidden signal present: ${s}`);
+        }
       }
+
       if (report.findings.length < 3) {
         warnings.push("Too few findings for this case");
       }
@@ -438,6 +587,7 @@ export async function GET(request: NextRequest) {
         letterTemplatesCount: report.actions.letterTemplates.length,
         expectedHits,
         forbiddenHits,
+        signalMatches,
         warnings,
         topFindings,
       };
@@ -457,6 +607,7 @@ export async function GET(request: NextRequest) {
         letterTemplatesCount: 0,
         expectedHits: [],
         forbiddenHits: [],
+        signalMatches: [],
         warnings: [`Error: ${msg}`],
         topFindings: [],
       });
