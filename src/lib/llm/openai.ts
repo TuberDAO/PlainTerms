@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { parseReportJson } from "./report-schema";
 import { MOCK_REPORT } from "./mock-report";
 import type { Report } from "@/types/report";
+import { anthropicGenerateText } from "./anthropic";
 
 const MAX_CHUNKS = 8;
 const MODEL = "gpt-4o-mini";
@@ -160,6 +161,37 @@ const QC_MIN_REPORT_JSON_LENGTH = 4000;
 const QC_SMALL_DOC_CHAR_THRESHOLD = 8000;
 const QC_RETRY_JSON_CAP = 30_000;
 
+function getBackend(): "openai" | "anthropic" {
+  return process.env.PLAINTERMS_LLM_BACKEND === "anthropic"
+    ? "anthropic"
+    : "openai";
+}
+
+function extractJson(raw: string): string {
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first !== -1 && last > first) return raw.slice(first, last + 1);
+  return raw;
+}
+
+async function callOpenAI(
+  messages: OpenAI.ChatCompletionMessageParam[],
+): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
+  const client = new OpenAI({ apiKey, maxRetries: 2 });
+  const completion = await client.chat.completions.create({
+    model: MODEL,
+    temperature: TEMPERATURE,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    response_format: { type: "json_object" },
+    messages,
+  });
+  const text = completion.choices[0]?.message?.content;
+  if (!text) throw new Error("Empty response from OpenAI.");
+  return text;
+}
+
 interface QualityResult {
   ok: boolean;
   issues: string[];
@@ -251,12 +283,7 @@ export async function runReportAnalysis(
     return report;
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is not configured.");
-  }
-
-  const client = new OpenAI({ apiKey, maxRetries: 2 });
+  const backend = getBackend();
 
   const chunksToSend = input.chunks.slice(0, MAX_CHUNKS);
   const isPartial = input.chunkCount > MAX_CHUNKS;
@@ -285,26 +312,23 @@ export async function runReportAnalysis(
   userContent += `\n--- DOCUMENT TEXT ---\n\n`;
   userContent += chunksToSend.join("\n---\n");
 
-  const completion = await client.chat.completions.create({
-    model: MODEL,
-    temperature: TEMPERATURE,
-    max_tokens: MAX_OUTPUT_TOKENS,
-    response_format: { type: "json_object" },
-    messages: [
+  let responseText: string;
+  if (backend === "anthropic") {
+    responseText = await anthropicGenerateText({
+      system: systemContent,
+      user: userContent,
+      maxTokens: MAX_OUTPUT_TOKENS,
+      temperature: TEMPERATURE,
+    });
+  } else {
+    responseText = await callOpenAI([
       { role: "system", content: systemContent },
       { role: "user", content: userContent },
-    ],
-  });
-
-  const responseText = completion.choices[0]?.message?.content;
-  if (!responseText) {
-    throw new Error("Empty response from OpenAI.");
+    ]);
   }
-
-  const tokensUsed = completion.usage?.total_tokens ?? 0;
+  responseText = extractJson(responseText);
   console.log("[llm]", {
-    model: MODEL,
-    tokensUsed,
+    backend,
     fingerprintLast4: input.fingerprint.slice(-4),
     chunksSent: chunksToSend.length,
   });
@@ -347,34 +371,43 @@ export async function runReportAnalysis(
         `Previous report JSON:\n${responseText}`;
     }
 
-    const retryMessages: OpenAI.ChatCompletionMessageParam[] =
-      responseText.length > QC_RETRY_JSON_CAP
-        ? [
-            { role: "system", content: systemContent },
-            { role: "user", content: userContent },
-            { role: "user", content: revisionContent },
-          ]
-        : [
-            { role: "system", content: systemContent },
-            { role: "user", content: userContent },
-            { role: "assistant", content: responseText },
-            { role: "user", content: revisionContent },
-          ];
+    let retryRaw: string | undefined;
+    try {
+      if (backend === "anthropic") {
+        const retryUser =
+          responseText.length > QC_RETRY_JSON_CAP
+            ? `${userContent}\n\n${revisionContent}`
+            : `${userContent}\n\n[Previous response]\n${responseText}\n\n${revisionContent}`;
+        retryRaw = await anthropicGenerateText({
+          system: systemContent,
+          user: retryUser,
+          maxTokens: MAX_OUTPUT_TOKENS,
+          temperature: TEMPERATURE,
+        });
+      } else {
+        const retryMessages: OpenAI.ChatCompletionMessageParam[] =
+          responseText.length > QC_RETRY_JSON_CAP
+            ? [
+                { role: "system", content: systemContent },
+                { role: "user", content: userContent },
+                { role: "user", content: revisionContent },
+              ]
+            : [
+                { role: "system", content: systemContent },
+                { role: "user", content: userContent },
+                { role: "assistant", content: responseText },
+                { role: "user", content: revisionContent },
+              ];
+        retryRaw = await callOpenAI(retryMessages);
+      }
+    } catch {
+      console.log("[llm] retry call failed, using original report");
+    }
 
-    const retryCompletion = await client.chat.completions.create({
-      model: MODEL,
-      temperature: TEMPERATURE,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      response_format: { type: "json_object" },
-      messages: retryMessages,
-    });
-
-    const retryText = retryCompletion.choices[0]?.message?.content;
-    if (retryText) {
-      const retryTokens = retryCompletion.usage?.total_tokens ?? 0;
-      console.log("[llm] retry completed", { retryTokens });
+    if (retryRaw) {
+      console.log("[llm] retry completed");
       try {
-        report = parseReportJson(retryText);
+        report = parseReportJson(extractJson(retryRaw));
       } catch {
         console.log("[llm] retry parse failed, using original report");
       }
