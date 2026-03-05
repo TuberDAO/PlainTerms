@@ -4,7 +4,6 @@ import { MOCK_REPORT } from "./mock-report";
 import type { Report } from "@/types/report";
 import { anthropicGenerateText } from "./anthropic";
 
-const MAX_CHUNKS = 8;
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 
 function getOpenAIModel(): string {
@@ -172,6 +171,62 @@ const QC_MIN_FIELD_LENGTH = 20;
 const QC_MIN_REPORT_JSON_LENGTH = 4000;
 const QC_SMALL_DOC_CHAR_THRESHOLD = 8000;
 const QC_RETRY_JSON_CAP = 30_000;
+
+const DEFAULT_MAX_INPUT_CHARS = 96_000;
+const DEFAULT_MAX_INPUT_CHARS_OPUS = 288_000;
+
+function getMaxInputChars(backend: string, model?: string): number {
+  if (backend === "anthropic" && model?.includes("opus")) {
+    const env = process.env.PLAINTERMS_MAX_INPUT_CHARS_OPUS;
+    return env ? parseInt(env, 10) || DEFAULT_MAX_INPUT_CHARS_OPUS : DEFAULT_MAX_INPUT_CHARS_OPUS;
+  }
+  const env = process.env.PLAINTERMS_MAX_INPUT_CHARS;
+  return env ? parseInt(env, 10) || DEFAULT_MAX_INPUT_CHARS : DEFAULT_MAX_INPUT_CHARS;
+}
+
+function selectChunks(
+  allChunks: string[],
+  maxInputChars: number,
+): { chunks: string[]; isPartial: boolean } {
+  const totalChars = allChunks.reduce((s, c) => s + c.length, 0);
+  if (totalChars <= maxInputChars) {
+    return { chunks: allChunks, isPartial: false };
+  }
+
+  const startBudget = maxInputChars * 0.4;
+  const middleBudget = maxInputChars * 0.2;
+  const endBudget = maxInputChars * 0.4;
+  const selected = new Set<number>();
+
+  let used = 0;
+  for (let i = 0; i < allChunks.length; i++) {
+    if (used + allChunks[i].length > startBudget && selected.size > 0) break;
+    selected.add(i);
+    used += allChunks[i].length;
+  }
+
+  used = 0;
+  for (let i = allChunks.length - 1; i >= 0; i--) {
+    if (selected.has(i)) continue;
+    if (used + allChunks[i].length > endBudget && used > 0) break;
+    selected.add(i);
+    used += allChunks[i].length;
+  }
+
+  const mid = Math.floor(allChunks.length / 2);
+  used = 0;
+  for (let off = 0; off < allChunks.length && used < middleBudget; off++) {
+    for (const idx of [mid + off, mid - off]) {
+      if (idx < 0 || idx >= allChunks.length || selected.has(idx)) continue;
+      if (used + allChunks[idx].length > middleBudget && used > 0) continue;
+      selected.add(idx);
+      used += allChunks[idx].length;
+    }
+  }
+
+  const indices = [...selected].sort((a, b) => a - b);
+  return { chunks: indices.map((i) => allChunks[i]), isPartial: true };
+}
 
 function getBackend(): "openai" | "anthropic" {
   return process.env.PLAINTERMS_LLM_BACKEND === "anthropic"
@@ -372,8 +427,26 @@ export async function runReportAnalysis(
     temperature: effectiveTemp,
   };
 
-  const chunksToSend = input.chunks.slice(0, MAX_CHUNKS);
-  const isPartial = input.chunkCount > MAX_CHUNKS;
+  const resolvedModel = options?.model ??
+    (backend === "anthropic"
+      ? (process.env.PLAINTERMS_ANTHROPIC_MODEL ?? "claude-opus-4-6")
+      : getOpenAIModel());
+  const maxInputChars = getMaxInputChars(backend, resolvedModel);
+  const { chunks: chunksToSend, isPartial } = selectChunks(
+    input.chunks,
+    maxInputChars,
+  );
+
+  if (isPartial) {
+    console.log("[llm] truncation", {
+      backend,
+      model: resolvedModel,
+      totalInputChars: input.chunks.reduce((s, c) => s + c.length, 0),
+      maxInputChars,
+      chunksTotal: input.chunks.length,
+      chunksSent: chunksToSend.length,
+    });
+  }
 
   const systemContent =
     SYSTEM_PROMPT + buildLocaleInstruction(input.locale);
@@ -394,7 +467,7 @@ export async function runReportAnalysis(
     userContent += `User context: ${contextParts.join(" | ")}\n`;
   }
   if (isPartial) {
-    userContent += `Note: This document has ${input.chunkCount} sections but only the first ${MAX_CHUNKS} are provided. Base your analysis on the available text.\n`;
+    userContent += `Note: Document was truncated for processing. Included: start+middle+end. Focus on cross-section interactions.\n`;
   }
   userContent += `\n--- DOCUMENT TEXT ---\n\n`;
   userContent += chunksToSend.join("\n---\n");
