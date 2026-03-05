@@ -3,6 +3,7 @@ export interface AnthropicGenerateInput {
   user: string;
   maxTokens: number;
   temperature: number;
+  model?: string;
 }
 
 const DEFAULT_MODEL = "claude-opus-4-6";
@@ -17,7 +18,8 @@ export async function anthropicGenerateText(
     );
   }
 
-  const model = process.env.PLAINTERMS_ANTHROPIC_MODEL ?? DEFAULT_MODEL;
+  const model =
+    input.model ?? process.env.PLAINTERMS_ANTHROPIC_MODEL ?? DEFAULT_MODEL;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -30,7 +32,13 @@ export async function anthropicGenerateText(
       model,
       max_tokens: input.maxTokens,
       temperature: input.temperature,
-      system: input.system,
+      system: [
+        {
+          type: "text",
+          text: input.system,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
       messages: [{ role: "user", content: input.user }],
     }),
   });
@@ -52,10 +60,16 @@ export async function anthropicGenerateText(
     throw new Error("Empty response from Anthropic.");
   }
 
-  const tokens = data.usage
-    ? (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0)
-    : 0;
-  console.log("[llm]", { backend: "anthropic", model, tokens });
+  const inputTokens = data.usage?.input_tokens ?? 0;
+  const outputTokens = data.usage?.output_tokens ?? 0;
+  const cacheRead = data.usage?.cache_read_input_tokens ?? 0;
+  console.log("[llm]", {
+    backend: "anthropic",
+    model,
+    inputTokens,
+    outputTokens,
+    ...(cacheRead > 0 ? { cacheReadTokens: cacheRead } : {}),
+  });
 
   return text;
 }

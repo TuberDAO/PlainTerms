@@ -25,6 +25,14 @@ export interface AnalysisInput {
   sourceType: string;
 }
 
+export interface AnalysisOptions {
+  backend?: "openai" | "anthropic";
+  model?: string;
+  maxOutputTokens?: number;
+  temperature?: number;
+  maxRetries?: number;
+}
+
 const SYSTEM_PROMPT = `You are PlainTerms, a document analysis assistant that helps ordinary people understand contracts and legal documents in plain English. You produce structured JSON analysis that is specific, grounded in the actual document text, and actionable.
 
 IMPORTANT RULES:
@@ -237,15 +245,18 @@ function patchReportDefaults(raw: string): string {
 
 async function callOpenAI(
   messages: OpenAI.ChatCompletionMessageParam[],
+  overrides?: { model?: string; maxTokens?: number; temperature?: number },
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
-  const model = getOpenAIModel();
+  const model = overrides?.model ?? getOpenAIModel();
+  const temperature = overrides?.temperature ?? TEMPERATURE;
+  const maxTokens = overrides?.maxTokens ?? MAX_OUTPUT_TOKENS;
   const client = new OpenAI({ apiKey, maxRetries: 2 });
   const completion = await client.chat.completions.create({
     model,
-    temperature: TEMPERATURE,
-    max_tokens: MAX_OUTPUT_TOKENS,
+    temperature,
+    max_tokens: maxTokens,
     response_format: { type: "json_object" },
     messages,
   });
@@ -254,7 +265,8 @@ async function callOpenAI(
   console.log("[llm]", {
     backend: "openai",
     model,
-    tokens: completion.usage?.total_tokens ?? 0,
+    inputTokens: completion.usage?.prompt_tokens ?? 0,
+    outputTokens: completion.usage?.completion_tokens ?? 0,
   });
   return text;
 }
@@ -341,6 +353,7 @@ function validateReportQuality(
 
 export async function runReportAnalysis(
   input: AnalysisInput,
+  options?: AnalysisOptions,
 ): Promise<Report> {
   if (process.env.PLAINTERMS_LLM_MODE === "mock") {
     const report: Report = JSON.parse(JSON.stringify(MOCK_REPORT));
@@ -350,7 +363,14 @@ export async function runReportAnalysis(
     return report;
   }
 
-  const backend = getBackend();
+  const backend = options?.backend ?? getBackend();
+  const effectiveMaxTokens = options?.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
+  const effectiveTemp = options?.temperature ?? TEMPERATURE;
+  const oaiOverrides = {
+    model: options?.model,
+    maxTokens: effectiveMaxTokens,
+    temperature: effectiveTemp,
+  };
 
   const chunksToSend = input.chunks.slice(0, MAX_CHUNKS);
   const isPartial = input.chunkCount > MAX_CHUNKS;
@@ -384,14 +404,15 @@ export async function runReportAnalysis(
     responseText = await anthropicGenerateText({
       system: systemContent,
       user: userContent,
-      maxTokens: MAX_OUTPUT_TOKENS,
-      temperature: TEMPERATURE,
+      maxTokens: effectiveMaxTokens,
+      temperature: effectiveTemp,
+      model: options?.model,
     });
   } else {
     responseText = await callOpenAI([
       { role: "system", content: systemContent },
       { role: "user", content: userContent },
-    ]);
+    ], oaiOverrides);
   }
   responseText = extractJson(responseText);
   console.log("[llm]", {
@@ -402,8 +423,8 @@ export async function runReportAnalysis(
 
   let report = parseReportJson(patchReportDefaults(responseText));
 
-  const maxRetries =
-    parseInt(process.env.PLAINTERMS_LLM_MAX_RETRIES ?? "1", 10) || 1;
+  const maxRetries = options?.maxRetries ??
+    (parseInt(process.env.PLAINTERMS_LLM_MAX_RETRIES ?? "1", 10) || 1);
   const inputCharCount = chunksToSend.reduce((s, c) => s + c.length, 0);
   const isSmallDoc =
     inputCharCount < QC_SMALL_DOC_CHAR_THRESHOLD && !isPartial;
@@ -453,8 +474,9 @@ export async function runReportAnalysis(
         retryRaw = await anthropicGenerateText({
           system: systemContent,
           user: retryUser,
-          maxTokens: MAX_OUTPUT_TOKENS,
-          temperature: TEMPERATURE,
+          maxTokens: effectiveMaxTokens,
+          temperature: effectiveTemp,
+          model: options?.model,
         });
       } else {
         const retryMessages: OpenAI.ChatCompletionMessageParam[] =
@@ -470,7 +492,7 @@ export async function runReportAnalysis(
                 { role: "assistant", content: responseText },
                 { role: "user", content: revisionContent },
               ];
-        retryRaw = await callOpenAI(retryMessages);
+        retryRaw = await callOpenAI(retryMessages, oaiOverrides);
       }
     } catch {
       console.log("[llm] retry call failed, using original report");

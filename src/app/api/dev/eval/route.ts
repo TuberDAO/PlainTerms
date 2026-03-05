@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { chunkText } from "@/lib/ingest/chunk";
-import { runReportAnalysis, type AnalysisInput } from "@/lib/llm/openai";
+import {
+  runReportAnalysis,
+  type AnalysisInput,
+  type AnalysisOptions,
+} from "@/lib/llm/openai";
 import crypto from "crypto";
 
 /* ------------------------------------------------------------------ */
@@ -499,6 +503,27 @@ export async function GET(request: NextRequest) {
     selected = CASES.slice(0, limit);
   }
 
+  const qsBackend = request.nextUrl.searchParams.get("backend");
+  const qsModel = request.nextUrl.searchParams.get("model");
+  const qsMaxTokens = request.nextUrl.searchParams.get("maxTokens");
+  const qsTemperature = request.nextUrl.searchParams.get("temperature");
+  const qsRetries = request.nextUrl.searchParams.get("retries");
+
+  const evalBackend =
+    qsBackend === "openai" || qsBackend === "anthropic"
+      ? qsBackend
+      : undefined;
+
+  const evalOptions: AnalysisOptions = {
+    ...(evalBackend ? { backend: evalBackend } : {}),
+    model:
+      qsModel ??
+      (evalBackend === "anthropic" ? "claude-sonnet-4-6" : undefined),
+    maxOutputTokens: qsMaxTokens ? parseInt(qsMaxTokens, 10) : 1200,
+    temperature: qsTemperature ? parseFloat(qsTemperature) : 0.2,
+    maxRetries: qsRetries !== null ? parseInt(qsRetries, 10) : 0,
+  };
+
   if (dryRun) {
     return NextResponse.json({
       ranAt: new Date().toISOString(),
@@ -537,7 +562,7 @@ export async function GET(request: NextRequest) {
         contractTypeHint: evalCase.contractTypeHint,
       };
 
-      const report = await runReportAnalysis(input);
+      const report = await runReportAnalysis(input, evalOptions);
       const haystack = buildContentHaystack(report);
 
       const expectedHits: string[] = [];
