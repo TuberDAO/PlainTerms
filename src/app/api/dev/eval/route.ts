@@ -325,7 +325,11 @@ interface CaseSummary {
 /* ------------------------------------------------------------------ */
 
 export async function GET(request: NextRequest) {
-  if (process.env.NODE_ENV !== "development") {
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.VERCEL_ENV === "production" ||
+    process.env.NODE_ENV !== "development"
+  ) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
