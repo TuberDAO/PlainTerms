@@ -23,6 +23,9 @@ export const reportContract: Report = {
       shortWhy:
         "Your subscription renews automatically at whatever the current price is, with no obligation to notify you of changes.",
       relatedClauseIds: ["c-con-1"],
+      impactType: "billing",
+      actionTiming: "before-renewal",
+      decisionRelevance: "decision-critical",
     },
     {
       id: "f-con-2",
@@ -33,6 +36,9 @@ export const reportContract: Report = {
       shortWhy:
         "By uploading files, you grant them a wide licence to use your content for 'service improvement' and analytics.",
       relatedClauseIds: ["c-con-2"],
+      impactType: "privacy",
+      actionTiming: "before-signing",
+      decisionRelevance: "decision-critical",
     },
     {
       id: "f-con-3",
@@ -43,6 +49,9 @@ export const reportContract: Report = {
       shortWhy:
         "They can modify any terms and your continued use counts as acceptance.",
       relatedClauseIds: ["c-con-3"],
+      impactType: "other",
+      actionTiming: "ongoing",
+      decisionRelevance: "important",
     },
     {
       id: "f-con-4",
@@ -53,6 +62,9 @@ export const reportContract: Report = {
       shortWhy:
         "If they lose your data, their maximum liability is your last monthly payment.",
       relatedClauseIds: ["c-con-4"],
+      impactType: "weak-remedy",
+      actionTiming: "if-problem-occurs",
+      decisionRelevance: "important",
     },
     {
       id: "f-con-5",
@@ -63,6 +75,9 @@ export const reportContract: Report = {
       shortWhy:
         "All your data is permanently deleted 30 days after you cancel — no recovery possible.",
       relatedClauseIds: ["c-con-5"],
+      impactType: "cancellation",
+      actionTiming: "before-cancellation",
+      decisionRelevance: "monitor",
     },
   ],
   paywalledFindingsCount: 2,
@@ -171,4 +186,6 @@ export const reportContract: Report = {
       },
     ],
   },
+  userQuestion: null,
+  userAnswer: null,
 };

@@ -23,6 +23,9 @@ export const reportInsurance: Report = {
       shortWhy:
         "The insurer decides what counts as pre-existing, and the definition is unusually wide.",
       relatedClauseIds: ["c-ins-1"],
+      impactType: "coverage",
+      actionTiming: "before-signing",
+      decisionRelevance: "decision-critical",
     },
     {
       id: "f-ins-2",
@@ -33,6 +36,9 @@ export const reportInsurance: Report = {
       shortWhy:
         "Your premium can go up by any amount each year with no ceiling.",
       relatedClauseIds: ["c-ins-2"],
+      impactType: "cost",
+      actionTiming: "before-renewal",
+      decisionRelevance: "decision-critical",
     },
     {
       id: "f-ins-3",
@@ -43,6 +49,9 @@ export const reportInsurance: Report = {
       shortWhy:
         "You have just 15 days to submit a claim after treatment, or it may be denied.",
       relatedClauseIds: ["c-ins-3"],
+      impactType: "admin-trap",
+      actionTiming: "before-claim",
+      decisionRelevance: "important",
     },
     {
       id: "f-ins-4",
@@ -53,6 +62,9 @@ export const reportInsurance: Report = {
       shortWhy:
         "The policy renews automatically and requires 60 days written notice to cancel.",
       relatedClauseIds: ["c-ins-4"],
+      impactType: "renewal",
+      actionTiming: "before-cancellation",
+      decisionRelevance: "important",
     },
     {
       id: "f-ins-5",
@@ -63,6 +75,9 @@ export const reportInsurance: Report = {
       shortWhy:
         "You cannot go to court; all disputes must go through their chosen arbitration process.",
       relatedClauseIds: ["c-ins-5"],
+      impactType: "weak-remedy",
+      actionTiming: "if-problem-occurs",
+      decisionRelevance: "monitor",
     },
     {
       id: "f-ins-6",
@@ -73,6 +88,9 @@ export const reportInsurance: Report = {
       shortWhy:
         "The maximum payout per incident is lower than comparable policies.",
       relatedClauseIds: ["c-ins-6"],
+      impactType: "coverage",
+      actionTiming: "before-claim",
+      decisionRelevance: "monitor",
     },
     {
       id: "f-ins-7",
@@ -83,6 +101,9 @@ export const reportInsurance: Report = {
       shortWhy:
         "Your personal and claims data may be shared with unnamed partner organizations.",
       relatedClauseIds: ["c-ins-7"],
+      impactType: "privacy",
+      actionTiming: "ongoing",
+      decisionRelevance: "background",
     },
   ],
   paywalledFindingsCount: 4,
@@ -237,4 +258,6 @@ export const reportInsurance: Report = {
       },
     ],
   },
+  userQuestion: null,
+  userAnswer: null,
 };

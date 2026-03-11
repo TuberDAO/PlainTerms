@@ -67,6 +67,38 @@ const ClauseCardSchema = z.object({
   crossClauseCombos: z.array(CrossClauseComboSchema).optional(),
 });
 
+const ImpactTypeSchema = z.enum([
+  "cost",
+  "service-loss",
+  "cancellation",
+  "renewal",
+  "coverage",
+  "billing",
+  "usage-restriction",
+  "privacy",
+  "weak-remedy",
+  "linked-agreement",
+  "admin-trap",
+  "other",
+]);
+
+const ActionTimingSchema = z.enum([
+  "before-signing",
+  "before-renewal",
+  "before-cancellation",
+  "before-claim",
+  "if-problem-occurs",
+  "ongoing",
+  "info-only",
+]);
+
+const DecisionRelevanceSchema = z.enum([
+  "decision-critical",
+  "important",
+  "monitor",
+  "background",
+]);
+
 const FindingSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -75,6 +107,9 @@ const FindingSchema = z.object({
   tags: z.array(TaxonomyTagSchema),
   shortWhy: z.string(),
   relatedClauseIds: z.array(z.string()),
+  impactType: ImpactTypeSchema.optional().default("other"),
+  actionTiming: ActionTimingSchema.optional().default("before-signing"),
+  decisionRelevance: DecisionRelevanceSchema.optional().default("important"),
 });
 
 export const ReportSchema = z.object({
@@ -96,6 +131,8 @@ export const ReportSchema = z.object({
     recommendedQuestions: z.array(z.string()),
     letterTemplates: z.array(LetterTemplateSchema),
   }),
+  userQuestion: z.string().nullable().optional().default(null),
+  userAnswer: z.string().nullable().optional().default(null),
 });
 
 export function parseReportJson(raw: string): Report {

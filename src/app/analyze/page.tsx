@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Suspense, useRef } from "react";
+import { useState, useCallback, Suspense, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,6 +18,15 @@ import { track } from "@/lib/analytics/tracker";
 import { useLocale } from "@/lib/locale/context";
 import { createBrowserClient } from "@/lib/supabase/client";
 import Link from "next/link";
+
+const GENERATE_STAGES = [
+  { label: "Analysing your document", pct: 8, durationMs: 1200 },
+  { label: "Identifying key clauses", pct: 20, durationMs: 2000 },
+  { label: "Reviewing contract terms", pct: 42, durationMs: 8000 },
+  { label: "Reviewing key clauses", pct: 66, durationMs: 12000 },
+  { label: "Preparing your PlainTerms report", pct: 86, durationMs: 15000 },
+  { label: "Saving your report", pct: 93, durationMs: 4000 },
+] as const;
 
 interface IngestResult {
   ok: true;
@@ -43,6 +52,9 @@ function AnalyzeContent() {
   const [ingestResult, setIngestResult] = useState<IngestResult | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [generateStage, setGenerateStage] = useState("");
+  const [generatePct, setGeneratePct] = useState(0);
+  const generateInflight = useRef(false);
   const [audienceChoice, setAudienceChoice] = useState("");
   const [audienceCustom, setAudienceCustom] = useState("");
   const [jurisdictionChoice, setJurisdictionChoice] = useState("");
@@ -50,6 +62,8 @@ function AnalyzeContent() {
   const [contractTypeChoice, setContractTypeChoice] = useState("");
   const [contractTypeCustom, setContractTypeCustom] = useState("");
   const [showTechDetails, setShowTechDetails] = useState(false);
+  const [questionText, setQuestionText] = useState("");
+  const [personalContext, setPersonalContext] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const audienceContext =
@@ -175,10 +189,34 @@ function AnalyzeContent() {
     return !!verifyData.session;
   }
 
+  const startProgressSimulation = useCallback(() => {
+    let stageIdx = 0;
+    setGenerateStage(GENERATE_STAGES[0].label);
+    setGeneratePct(GENERATE_STAGES[0].pct);
+
+    const iv = setInterval(() => {
+      stageIdx++;
+      if (stageIdx < GENERATE_STAGES.length) {
+        setGenerateStage(GENERATE_STAGES[stageIdx].label);
+        setGeneratePct(GENERATE_STAGES[stageIdx].pct);
+      } else {
+        clearInterval(iv);
+      }
+    }, 6000);
+
+    return iv;
+  }, []);
+
   async function handleGenerateReport() {
+    if (generateInflight.current) return;
+    generateInflight.current = true;
     setGenerating(true);
     setGenerateError(null);
     setError(null);
+    setGeneratePct(0);
+    setGenerateStage("Preparing document");
+
+    const progressIv = startProgressSimulation();
 
     try {
       const hasSession = await ensureSession();
@@ -197,9 +235,12 @@ function AnalyzeContent() {
       })();
 
       if (!payload) {
-        setGenerateError("No ingested document found. Please analyze a document first.");
+        setGenerateError("No ingested document found. Please analyse a document first.");
         return;
       }
+
+      setGenerateStage("Analysing contract");
+      setGeneratePct(20);
 
       const res = await fetch("/api/report/generate", {
         method: "POST",
@@ -218,21 +259,43 @@ function AnalyzeContent() {
           audienceContext: audienceContext || undefined,
           jurisdictionContext: jurisdictionContext || undefined,
           contractTypeHint: contractTypeHint || undefined,
+          personalContext: personalContext.trim() || undefined,
+          question: questionText.trim() || undefined,
         }),
       });
 
-      const data = await res.json();
+      let data: { ok?: boolean; error?: string; reportId?: string };
+      try {
+        data = await res.json();
+      } catch {
+        data = { ok: false, error: `Server returned ${res.status} with no body.` };
+      }
 
       if (!res.ok || !data.ok) {
-        setGenerateError(data.error ?? "Report generation failed.");
+        if (data.reportId) {
+          setGenerateStage("Opening report");
+          setGeneratePct(100);
+          router.push(`/report/${data.reportId}`);
+          return;
+        }
+        const detail = data.error ?? "Report generation failed.";
+        setGenerateError(detail);
         return;
       }
 
+      setGenerateStage("Opening report");
+      setGeneratePct(100);
       router.push(`/report/${data.reportId}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      setGenerateError(`Report generation failed: ${msg}`);
+      setGenerateError(
+        msg.includes("Failed to fetch")
+          ? "Network error — please check your connection and try again."
+          : `Report generation failed: ${msg}`,
+      );
     } finally {
+      clearInterval(progressIv);
+      generateInflight.current = false;
       setGenerating(false);
     }
   }
@@ -414,10 +477,15 @@ function AnalyzeContent() {
                 {/* Context selectors */}
                 <div className="mt-4 space-y-3 pl-6">
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground">
+                    <label
+                      htmlFor="pt-audience"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
                       Who is this for? (optional)
                     </label>
                     <select
+                      id="pt-audience"
+                      name="audience"
                       value={audienceChoice}
                       onChange={(e) => {
                         setAudienceChoice(e.target.value);
@@ -454,10 +522,15 @@ function AnalyzeContent() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground">
+                    <label
+                      htmlFor="pt-jurisdiction"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
                       Where does this contract apply? (optional)
                     </label>
                     <select
+                      id="pt-jurisdiction"
+                      name="jurisdiction"
                       value={jurisdictionChoice}
                       onChange={(e) => {
                         setJurisdictionChoice(e.target.value);
@@ -499,10 +572,15 @@ function AnalyzeContent() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground">
+                    <label
+                      htmlFor="pt-contract-type"
+                      className="text-xs font-medium text-muted-foreground"
+                    >
                       What type of contract is this? (optional)
                     </label>
                     <select
+                      id="pt-contract-type"
+                      name="contractType"
                       value={contractTypeChoice}
                       onChange={(e) => {
                         setContractTypeChoice(e.target.value);
@@ -552,27 +630,96 @@ function AnalyzeContent() {
                   </div>
                 </div>
 
-                {generateError && (
-                  <div
-                    role="alert"
-                    className="mt-3 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                <div className="ml-6 mt-3">
+                  <label
+                    htmlFor="pt-question"
+                    className="block text-xs font-medium text-muted-foreground"
                   >
-                    {generateError}
-                  </div>
-                )}
-                <Button
-                  size="sm"
-                  className="mt-4 ml-6 gap-2"
-                  onClick={handleGenerateReport}
-                  disabled={generating}
-                >
-                  {generating ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <FileText className="h-3.5 w-3.5" />
+                    Got a specific question? (optional)
+                  </label>
+                  <input
+                    id="pt-question"
+                    name="question"
+                    type="text"
+                    value={questionText}
+                    onChange={(e) => setQuestionText(e.target.value)}
+                    placeholder="e.g., Can I cancel online?"
+                    className="mt-1.5 block w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    maxLength={200}
+                  />
+                </div>
+
+                <div className="ml-6 mt-3">
+                  <label
+                    htmlFor="pt-personal-context"
+                    className="block text-xs font-medium text-muted-foreground"
+                  >
+                    Anything about your situation that may matter? (optional)
+                  </label>
+                  <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground/60">
+                    A few words can make the report more relevant. Example:{" "}
+                    <em>
+                      I have asthma, I travel a lot, I need to keep this
+                      number, I work from home.
+                    </em>
+                  </p>
+                  <textarea
+                    id="pt-personal-context"
+                    name="personalContext"
+                    value={personalContext}
+                    onChange={(e) =>
+                      setPersonalContext(e.target.value.slice(0, 500))
+                    }
+                    placeholder="e.g., I have a pre-existing condition and need reliable cover..."
+                    rows={2}
+                    className="mt-1.5 block w-full resize-y rounded-md border bg-background px-3 py-2 text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    maxLength={500}
+                  />
+                  {personalContext.length > 0 && (
+                    <p className="mt-1 text-right text-[11px] text-muted-foreground/50">
+                      {personalContext.length}/500
+                    </p>
                   )}
-                  {generating ? "Generating..." : "Generate report"}
-                </Button>
+                </div>
+
+                {generating ? (
+                  <div className="mt-5 ml-6 rounded-xl border border-green-200 bg-green-50/60 p-5">
+                    <p className="text-sm font-semibold text-green-900">
+                      {generateStage}
+                    </p>
+                    <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-green-100">
+                      <div
+                        className="h-full rounded-full bg-green-500 transition-all duration-[1200ms] ease-out"
+                        style={{ width: `${generatePct}%` }}
+                      />
+                    </div>
+                    <p className="mt-2.5 text-xs text-green-700/80">
+                      {generatePct < 55
+                        ? "Longer documents can take a little longer — we're reading everything carefully."
+                        : "Almost ready. Please keep this tab open."}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    {generateError && (
+                      <div
+                        role="alert"
+                        className="mt-3 ml-6 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                      >
+                        {generateError}
+                      </div>
+                    )}
+                    <Button
+                      size="sm"
+                      className="mt-4 ml-6 gap-2"
+                      onClick={handleGenerateReport}
+                      disabled={generating}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Generate report
+                    </Button>
+                  </>
+                )}
               </div>
             )}
 

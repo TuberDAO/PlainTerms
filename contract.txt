@@ -1,0 +1,1 @@
+$contractText = Get-Content -Raw .\contract.txt -Encoding utf8

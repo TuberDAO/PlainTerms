@@ -1,4 +1,7 @@
+"use client";
+
 import { SeverityBadge } from "@/components/shared/severity-badge";
+import { SimplifyBlock } from "./simplify-block";
 import type { Report } from "@/types/report";
 
 export function VerdictHeader({ verdict }: { verdict: Report["verdict"] }) {
@@ -20,6 +23,7 @@ export function VerdictHeader({ verdict }: { verdict: Report["verdict"] }) {
       <p className="mt-5 max-w-prose text-base leading-relaxed text-muted-foreground">
         {verdict.summary}
       </p>
+      <SimplifyBlock text={verdict.summary} />
     </div>
   );
 }

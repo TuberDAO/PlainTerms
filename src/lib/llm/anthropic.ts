@@ -6,11 +6,21 @@ export interface AnthropicGenerateInput {
   model?: string;
 }
 
+export interface AnthropicResult {
+  text: string;
+  stopReason?: string;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+  };
+}
+
 const DEFAULT_MODEL = "claude-opus-4-6";
 
 export async function anthropicGenerateText(
   input: AnthropicGenerateInput,
-): Promise<string> {
+): Promise<AnthropicResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -63,13 +73,23 @@ export async function anthropicGenerateText(
   const inputTokens = data.usage?.input_tokens ?? 0;
   const outputTokens = data.usage?.output_tokens ?? 0;
   const cacheRead = data.usage?.cache_read_input_tokens ?? 0;
+  const stopReason: string | undefined = data.stop_reason ?? undefined;
   console.log("[llm]", {
     backend: "anthropic",
     model,
     inputTokens,
     outputTokens,
     ...(cacheRead > 0 ? { cacheReadTokens: cacheRead } : {}),
+    ...(stopReason ? { stopReason } : {}),
   });
 
-  return text;
+  return {
+    text,
+    stopReason,
+    usage: {
+      inputTokens,
+      outputTokens,
+      ...(cacheRead > 0 ? { cacheReadTokens: cacheRead } : {}),
+    },
+  };
 }

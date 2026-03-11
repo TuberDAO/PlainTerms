@@ -2,9 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { chunkText } from "@/lib/ingest/chunk";
 import {
   runReportAnalysis,
+  getMaxInputChars,
   type AnalysisInput,
   type AnalysisOptions,
+  type OpenAIReasoningEffort,
+  type OpenAIVerbosity,
 } from "@/lib/llm/openai";
+import { computeDiagnostic, type DiagnosticSummary } from "@/lib/eval/diagnostic";
+import { resolveContractPolicy } from "@/lib/llm/contract-family-policy";
+import {
+  buildCompareSideOptions,
+  toAnalysisOptions,
+  buildSide,
+  buildComparisonSummary,
+  type CompareResponse,
+} from "@/lib/eval/compare";
 import crypto from "crypto";
 
 /* ------------------------------------------------------------------ */
@@ -317,17 +329,50 @@ interface SignalMatch {
   matchedPhrase: string;
 }
 
+/** Metadata about what context was included in the prompt. Safe to expose in dev. */
+interface PromptMeta {
+  audienceIncluded: boolean;
+  jurisdictionIncluded: boolean;
+  contractTypeIncluded: boolean;
+  personalContextIncluded: boolean;
+  questionIncluded: boolean;
+  truncationNoteIncluded: boolean;
+  adviceMode: string;
+  negotiabilityClass: string;
+}
+
 interface CaseSummary {
   id: string;
   title: string;
+  /** Compact quality diagnostic for this report. */
+  diagnostic: DiagnosticSummary | null;
+  /** Verdict headline and summary for quick scanning. */
+  verdict: { headline: string; summary: string; severityOverall: string; scoreOverall: number } | null;
+  /** Clause card labels in order — useful for seeing what topics were covered. */
+  topClauseLabels: string[];
+  /** Advice mode resolved from contract family / type hint. */
+  adviceMode: string;
+  /** Negotiability classification resolved from contract family / type hint. */
+  negotiabilityClass: string;
+  /** Kept for backward compatibility — same as diagnostic.findingsCount. */
   findingsCount: number;
+  /** Kept for backward compatibility — same as diagnostic.clauseCardsCount. */
   clauseCardsCount: number;
+  /** Kept for backward compatibility — same as diagnostic.letterTemplatesCount. */
   letterTemplatesCount: number;
   expectedHits: string[];
   forbiddenHits: string[];
   signalMatches: SignalMatch[];
   warnings: string[];
   topFindings: { severity: string; title: string; shortWhy: string }[];
+  /** Only present when debug=true. */
+  promptMeta?: PromptMeta;
+  /** Only present when debug=true. Full generated report object. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fullReport?: any;
+  /** Present on POST results when the analysis included a user question. */
+  userQuestion?: string | null;
+  userAnswer?: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -468,6 +513,105 @@ function buildContentHaystack(report: {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Compare-mode helpers                                               */
+/* ------------------------------------------------------------------ */
+
+/** Parse compare query params from a URLSearchParams object. */
+const VALID_REASONING_EFFORTS: ReadonlySet<string> = new Set([
+  "none", "low", "medium", "high", "xhigh",
+]);
+
+function parseReasoningEffort(raw: string | null): OpenAIReasoningEffort | undefined {
+  if (!raw) return undefined;
+  return VALID_REASONING_EFFORTS.has(raw) ? (raw as OpenAIReasoningEffort) : undefined;
+}
+
+const VALID_VERBOSITIES: ReadonlySet<string> = new Set(["low", "medium", "high"]);
+
+function parseVerbosity(raw: string | null): OpenAIVerbosity | undefined {
+  if (!raw) return undefined;
+  return VALID_VERBOSITIES.has(raw) ? (raw as OpenAIVerbosity) : undefined;
+}
+
+function parseCompareParams(sp: URLSearchParams) {
+  return {
+    compare: sp.get("compare") === "1",
+    anthropicModel: sp.get("anthropicModel") ?? undefined,
+    openaiModel: sp.get("openaiModel") ?? undefined,
+    anthropicMaxTokens: sp.has("anthropicMaxTokens")
+      ? parseInt(sp.get("anthropicMaxTokens")!, 10) || undefined
+      : undefined,
+    openaiMaxTokens: sp.has("openaiMaxTokens")
+      ? parseInt(sp.get("openaiMaxTokens")!, 10) || undefined
+      : undefined,
+    temperature: sp.has("temperature")
+      ? parseFloat(sp.get("temperature")!) || undefined
+      : undefined,
+    openaiReasoningEffort: parseReasoningEffort(
+      sp.get("openaiReasoningEffort"),
+    ),
+    openaiVerbosity: parseVerbosity(sp.get("openaiVerbosity")),
+    openaiStructured: sp.get("openaiStructured") === "1",
+    compareRetries: sp.has("compareRetries")
+      ? parseInt(sp.get("compareRetries")!, 10)
+      : undefined,
+  };
+}
+
+/**
+ * Run two analyses on the same AnalysisInput and return a CompareResponse.
+ * Both sides share identical input, schema, and prompt stack.
+ */
+async function runCompare(
+  input: AnalysisInput,
+  compareParams: ReturnType<typeof parseCompareParams>,
+  debug: boolean,
+  inputId: string,
+): Promise<CompareResponse> {
+  const aOpts = buildCompareSideOptions("a", compareParams);
+  const bOpts = buildCompareSideOptions("b", compareParams);
+
+  const totalInputChars = input.chunks.reduce((s, c) => s + c.length, 0);
+
+  // Run both sides concurrently for speed.
+  const [aResult, bResult] = await Promise.allSettled([
+    runReportAnalysis(input, toAnalysisOptions(aOpts)),
+    runReportAnalysis(input, toAnalysisOptions(bOpts)),
+  ]);
+
+  const aReport = aResult.status === "fulfilled" ? aResult.value : null;
+  const bReport = bResult.status === "fulfilled" ? bResult.value : null;
+  const aError = aResult.status === "rejected"
+    ? (aResult.reason instanceof Error ? aResult.reason.message : "Unknown error")
+    : undefined;
+  const bError = bResult.status === "rejected"
+    ? (bResult.reason instanceof Error ? bResult.reason.message : "Unknown error")
+    : undefined;
+
+  const aTruncated = totalInputChars > getMaxInputChars("anthropic", aOpts.model);
+  const bTruncated = totalInputChars > getMaxInputChars("openai", bOpts.model);
+
+  const aDiag = aReport ? computeDiagnostic(aReport, { truncated: aTruncated }) : null;
+  const bDiag = bReport ? computeDiagnostic(bReport, { truncated: bTruncated }) : null;
+
+  const sideA = buildSide(aOpts, aReport, aDiag, aTruncated, debug, aError);
+  const sideB = buildSide(bOpts, bReport, bDiag, bTruncated, debug, bError);
+
+  console.log(
+    `[eval:compare] id=${inputId} A=${aOpts.backend}/${aOpts.model} findings=${aReport?.findings.length ?? "err"}` +
+    ` B=${bOpts.backend}/${bOpts.model} findings=${bReport?.findings.length ?? "err"}`,
+  );
+
+  return {
+    ranAt: new Date().toISOString(),
+    compareMode: true,
+    inputId,
+    sides: { a: sideA, b: sideB },
+    summary: buildComparisonSummary(sideA, sideB),
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /*  GET handler                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -508,6 +652,8 @@ export async function GET(request: NextRequest) {
   const qsMaxTokens = request.nextUrl.searchParams.get("maxTokens");
   const qsTemperature = request.nextUrl.searchParams.get("temperature");
   const qsRetries = request.nextUrl.searchParams.get("retries");
+  const debug = request.nextUrl.searchParams.get("debug") === "true";
+  const compareParams = parseCompareParams(request.nextUrl.searchParams);
 
   const evalBackend =
     qsBackend === "openai" || qsBackend === "anthropic"
@@ -519,7 +665,9 @@ export async function GET(request: NextRequest) {
     model:
       qsModel ??
       (evalBackend === "anthropic" ? "claude-sonnet-4-6" : undefined),
-    maxOutputTokens: qsMaxTokens ? parseInt(qsMaxTokens, 10) : 1200,
+    maxOutputTokens: qsMaxTokens
+      ? parseInt(qsMaxTokens, 10)
+      : evalBackend === "anthropic" ? 2500 : 1200,
     temperature: qsTemperature ? parseFloat(qsTemperature) : 0.2,
     maxRetries: qsRetries !== null ? parseInt(qsRetries, 10) : 0,
   };
@@ -530,6 +678,7 @@ export async function GET(request: NextRequest) {
       mode: "dryRun",
       totalCases: CASES.length,
       selectedCount: selected.length,
+      evalOptions,
       cases: selected.map((c) => ({
         id: c.id,
         title: c.title,
@@ -543,9 +692,35 @@ export async function GET(request: NextRequest) {
     });
   }
 
+  // ---- Compare mode: run both sides on each selected case ----
+  if (compareParams.compare) {
+    const compareResults = [];
+    for (const evalCase of selected) {
+      const { chunks, chunkCount } = chunkText(evalCase.text);
+      const input: AnalysisInput = {
+        chunks,
+        chunkCount,
+        fingerprint: crypto.createHash("sha256").update(evalCase.id).digest("hex"),
+        sourceType: "text",
+        audienceContext: evalCase.audienceContext,
+        jurisdictionContext: evalCase.jurisdictionContext,
+        contractTypeHint: evalCase.contractTypeHint,
+      };
+      const cmp = await runCompare(input, compareParams, debug, evalCase.id);
+      compareResults.push({ id: evalCase.id, title: evalCase.title, ...cmp });
+    }
+    return NextResponse.json({
+      ranAt: new Date().toISOString(),
+      mode: "compare",
+      selectedCount: compareResults.length,
+      results: compareResults,
+    });
+  }
+
   const results: CaseSummary[] = [];
 
   for (const evalCase of selected) {
+    const casePolicy = resolveContractPolicy(undefined, evalCase.contractTypeHint);
     try {
       const { chunks, chunkCount } = chunkText(evalCase.text);
 
@@ -562,7 +737,14 @@ export async function GET(request: NextRequest) {
         contractTypeHint: evalCase.contractTypeHint,
       };
 
+      // Detect truncation using the same budget logic as runReportAnalysis.
+      const resolvedBackend = evalOptions.backend ?? "openai";
+      const resolvedModel = evalOptions.model;
+      const totalInputChars = chunks.reduce((s, c) => s + c.length, 0);
+      const truncated = totalInputChars > getMaxInputChars(resolvedBackend, resolvedModel);
+
       const report = await runReportAnalysis(input, evalOptions);
+      const diagnostic = computeDiagnostic(report, { truncated });
       const haystack = buildContentHaystack(report);
 
       const expectedHits: string[] = [];
@@ -588,13 +770,13 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      if (report.findings.length < 3) {
-        warnings.push("Too few findings for this case");
+      if (report.findings.length === 0) {
+        warnings.push("No findings produced — report is empty");
       }
       const whys = report.findings.map((f) => f.shortWhy.toLowerCase().trim());
-      const counts = new Map<string, number>();
-      for (const w of whys) counts.set(w, (counts.get(w) ?? 0) + 1);
-      if ([...counts.values()].some((n) => n >= 3)) {
+      const wCounts = new Map<string, number>();
+      for (const w of whys) wCounts.set(w, (wCounts.get(w) ?? 0) + 1);
+      if ([...wCounts.values()].some((n) => n >= 3)) {
         warnings.push("Findings appear repetitive");
       }
 
@@ -604,9 +786,34 @@ export async function GET(request: NextRequest) {
         shortWhy: f.shortWhy,
       }));
 
+      const topClauseLabels = report.clauseCards
+        .slice(0, 8)
+        .map((c) => c.clauseLabel);
+
+      const promptMeta: PromptMeta = {
+        audienceIncluded: !!evalCase.audienceContext,
+        jurisdictionIncluded: !!evalCase.jurisdictionContext,
+        contractTypeIncluded: !!evalCase.contractTypeHint,
+        personalContextIncluded: false,
+        questionIncluded: false,
+        truncationNoteIncluded: truncated,
+        adviceMode: casePolicy.adviceMode,
+        negotiabilityClass: casePolicy.negotiabilityClass,
+      };
+
       const summary: CaseSummary = {
         id: evalCase.id,
         title: evalCase.title,
+        diagnostic,
+        verdict: {
+          headline: report.verdict.headline,
+          summary: report.verdict.summary,
+          severityOverall: report.verdict.severityOverall,
+          scoreOverall: report.verdict.scoreOverall,
+        },
+        topClauseLabels,
+        adviceMode: casePolicy.adviceMode,
+        negotiabilityClass: casePolicy.negotiabilityClass,
         findingsCount: report.findings.length,
         clauseCardsCount: report.clauseCards.length,
         letterTemplatesCount: report.actions.letterTemplates.length,
@@ -615,25 +822,36 @@ export async function GET(request: NextRequest) {
         signalMatches,
         warnings,
         topFindings,
+        ...(debug ? { promptMeta, fullReport: report } : {}),
       };
 
       results.push(summary);
 
       console.log(
-        `[eval] case=${evalCase.id} findings=${report.findings.length} warnings=${warnings.length}`,
+        `[eval] case=${evalCase.id} findings=${report.findings.length} clauseCards=${report.clauseCards.length} warnings=${warnings.length}`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
+      const debugMeta = (err as Record<string, unknown>)?.anthropicDebug;
+      const errorWarnings = [`Error: ${msg}`];
+      if (debugMeta) {
+        errorWarnings.push(`Anthropic debug: ${JSON.stringify(debugMeta)}`);
+      }
       results.push({
         id: evalCase.id,
         title: evalCase.title,
+        diagnostic: null,
+        verdict: null,
+        topClauseLabels: [],
+        adviceMode: casePolicy.adviceMode,
+        negotiabilityClass: casePolicy.negotiabilityClass,
         findingsCount: 0,
         clauseCardsCount: 0,
         letterTemplatesCount: 0,
         expectedHits: [],
         forbiddenHits: [],
         signalMatches: [],
-        warnings: [`Error: ${msg}`],
+        warnings: errorWarnings,
         topFindings: [],
       });
       console.log(`[eval] case=${evalCase.id} error`);
@@ -642,7 +860,238 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     ranAt: new Date().toISOString(),
+    evalOptions,
     selectedCount: results.length,
     results,
   });
+}
+
+/* ------------------------------------------------------------------ */
+/*  POST handler — run a custom contract through the eval pipeline     */
+/* ------------------------------------------------------------------ */
+
+export async function POST(request: NextRequest) {
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.VERCEL_ENV === "production" ||
+    process.env.NODE_ENV !== "development"
+  ) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const secret = process.env.PLAINTERMS_EVAL_SECRET;
+  if (secret) {
+    const qs = request.nextUrl.searchParams.get("secret");
+    if (qs !== secret) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON body" },
+      { status: 400 },
+    );
+  }
+
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if (text.length < 200) {
+    return NextResponse.json(
+      { error: "text is required and must be at least 200 characters" },
+      { status: 400 },
+    );
+  }
+
+  const audienceContext =
+    typeof body.audienceContext === "string"
+      ? body.audienceContext.trim() || undefined
+      : undefined;
+  const jurisdictionContext =
+    typeof body.jurisdictionContext === "string"
+      ? body.jurisdictionContext.trim() || undefined
+      : undefined;
+  const contractTypeHint =
+    typeof body.contractTypeHint === "string"
+      ? body.contractTypeHint.trim() || undefined
+      : undefined;
+  const personalContext =
+    typeof body.personalContext === "string"
+      ? body.personalContext.trim().slice(0, 500) || undefined
+      : undefined;
+  const question =
+    typeof body.question === "string"
+      ? body.question.trim() || undefined
+      : undefined;
+
+  const effectiveAudience = audienceContext;
+
+  const qsBackend = request.nextUrl.searchParams.get("backend");
+  const qsModel = request.nextUrl.searchParams.get("model");
+  const qsMaxTokens = request.nextUrl.searchParams.get("maxTokens");
+  const qsTemperature = request.nextUrl.searchParams.get("temperature");
+  const qsRetries = request.nextUrl.searchParams.get("retries");
+  const debug = request.nextUrl.searchParams.get("debug") === "true";
+  const postCompareParams = parseCompareParams(request.nextUrl.searchParams);
+
+  const evalBackend =
+    qsBackend === "openai" || qsBackend === "anthropic"
+      ? qsBackend
+      : undefined;
+
+  const evalOptions: AnalysisOptions = {
+    ...(evalBackend ? { backend: evalBackend } : {}),
+    model:
+      qsModel ??
+      (evalBackend === "anthropic" ? "claude-sonnet-4-6" : undefined),
+    maxOutputTokens: qsMaxTokens
+      ? parseInt(qsMaxTokens, 10)
+      : evalBackend === "anthropic" ? 2500 : 1200,
+    temperature: qsTemperature ? parseFloat(qsTemperature) : 0.2,
+    maxRetries: qsRetries !== null ? parseInt(qsRetries, 10) : 0,
+  };
+
+  // ---- Compare mode for POST ----
+  if (postCompareParams.compare) {
+    const { chunks, chunkCount } = chunkText(text);
+    const fingerprint = crypto
+      .createHash("sha256")
+      .update("custom-compare-" + Date.now())
+      .digest("hex");
+    const input: AnalysisInput = {
+      chunks,
+      chunkCount,
+      fingerprint,
+      sourceType: "text",
+      audienceContext,
+      jurisdictionContext,
+      contractTypeHint,
+      personalContext,
+      question,
+    };
+    const cmp = await runCompare(input, postCompareParams, debug, "custom");
+    return NextResponse.json(cmp);
+  }
+
+  try {
+    const { chunks, chunkCount } = chunkText(text);
+
+    const input: AnalysisInput = {
+      chunks,
+      chunkCount,
+      fingerprint: crypto
+        .createHash("sha256")
+        .update("custom-" + Date.now())
+        .digest("hex"),
+      sourceType: "text",
+      audienceContext: effectiveAudience,
+      jurisdictionContext,
+      contractTypeHint,
+      personalContext,
+      question,
+    };
+
+    const resolvedBackend = evalOptions.backend ?? "openai";
+    const resolvedModel = evalOptions.model;
+    const totalInputChars = chunks.reduce((s, c) => s + c.length, 0);
+    const truncated = totalInputChars > getMaxInputChars(resolvedBackend, resolvedModel);
+
+    const report = await runReportAnalysis(input, evalOptions);
+    const diagnostic = computeDiagnostic(report, { truncated });
+
+    const topFindings = report.findings.slice(0, 5).map((f) => ({
+      severity: f.severity,
+      title: f.title,
+      shortWhy: f.shortWhy,
+    }));
+
+    const topClauseLabels = report.clauseCards
+      .slice(0, 8)
+      .map((c) => c.clauseLabel);
+
+    const warnings: string[] = [];
+    if (report.findings.length === 0) {
+      warnings.push("No findings produced — report is empty");
+    }
+
+    const postPolicy = resolveContractPolicy(undefined, contractTypeHint);
+    const promptMeta: PromptMeta = {
+      audienceIncluded: !!audienceContext,
+      jurisdictionIncluded: !!jurisdictionContext,
+      contractTypeIncluded: !!contractTypeHint,
+      personalContextIncluded: !!personalContext,
+      questionIncluded: !!question,
+      truncationNoteIncluded: truncated,
+      adviceMode: postPolicy.adviceMode,
+      negotiabilityClass: postPolicy.negotiabilityClass,
+    };
+
+    const result: CaseSummary = {
+      id: "custom",
+      title: "custom",
+      diagnostic,
+      verdict: {
+        headline: report.verdict.headline,
+        summary: report.verdict.summary,
+        severityOverall: report.verdict.severityOverall,
+        scoreOverall: report.verdict.scoreOverall,
+      },
+      topClauseLabels,
+      adviceMode: postPolicy.adviceMode,
+      negotiabilityClass: postPolicy.negotiabilityClass,
+      findingsCount: report.findings.length,
+      clauseCardsCount: report.clauseCards.length,
+      letterTemplatesCount: report.actions.letterTemplates.length,
+      expectedHits: [],
+      forbiddenHits: [],
+      signalMatches: [],
+      warnings,
+      topFindings,
+      userQuestion: report.userQuestion ?? null,
+      userAnswer: report.userAnswer ?? null,
+      ...(debug ? { promptMeta, fullReport: report } : {}),
+    };
+
+    console.log(
+      `[eval] case=custom findings=${report.findings.length} clauseCards=${report.clauseCards.length}`,
+    );
+
+    return NextResponse.json({
+      ranAt: new Date().toISOString(),
+      evalOptions,
+      selectedCount: 1,
+      results: [result],
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    const debugMeta = (err as Record<string, unknown>)?.anthropicDebug;
+    const errorWarnings = [`Error: ${msg}`];
+    if (debugMeta) {
+      errorWarnings.push(`Anthropic debug: ${JSON.stringify(debugMeta)}`);
+    }
+    return NextResponse.json({
+      ranAt: new Date().toISOString(),
+      evalOptions,
+      selectedCount: 1,
+      results: [
+        {
+          id: "custom",
+          title: "custom",
+          diagnostic: null,
+          verdict: null,
+          topClauseLabels: [],
+          findingsCount: 0,
+          clauseCardsCount: 0,
+          letterTemplatesCount: 0,
+          expectedHits: [],
+          forbiddenHits: [],
+          signalMatches: [],
+          warnings: errorWarnings,
+          topFindings: [],
+        },
+      ],
+    });
+  }
 }

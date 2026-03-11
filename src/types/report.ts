@@ -60,6 +60,35 @@ export interface ClauseCard {
   crossClauseCombos?: CrossClauseCombo[];
 }
 
+export type ImpactType =
+  | "cost"
+  | "service-loss"
+  | "cancellation"
+  | "renewal"
+  | "coverage"
+  | "billing"
+  | "usage-restriction"
+  | "privacy"
+  | "weak-remedy"
+  | "linked-agreement"
+  | "admin-trap"
+  | "other";
+
+export type ActionTiming =
+  | "before-signing"
+  | "before-renewal"
+  | "before-cancellation"
+  | "before-claim"
+  | "if-problem-occurs"
+  | "ongoing"
+  | "info-only";
+
+export type DecisionRelevance =
+  | "decision-critical"
+  | "important"
+  | "monitor"
+  | "background";
+
 export interface Finding {
   id: string;
   title: string;
@@ -68,6 +97,9 @@ export interface Finding {
   tags: TaxonomyTag[];
   shortWhy: string;
   relatedClauseIds: string[];
+  impactType: ImpactType;
+  actionTiming: ActionTiming;
+  decisionRelevance: DecisionRelevance;
 }
 
 export interface Report {
@@ -89,6 +121,8 @@ export interface Report {
     recommendedQuestions: string[];
     letterTemplates: LetterTemplate[];
   };
+  userQuestion: string | null;
+  userAnswer: string | null;
 }
 
 export interface HeroExample {

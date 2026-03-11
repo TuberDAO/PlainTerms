@@ -14,6 +14,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Download, Share2, AlertTriangle } from "lucide-react";
+import { UserQuestionAnswer } from "@/components/report/user-question-answer";
+import { PrioritySummary } from "@/components/report/priority-summary";
 import { track } from "@/lib/analytics/tracker";
 import {
   PREVIEW_FINDINGS_LIMIT,
@@ -21,6 +23,7 @@ import {
 } from "@/lib/budget";
 import Link from "next/link";
 import type { Report } from "@/types/report";
+import { rankFindings } from "@/lib/report/rank-findings";
 
 interface ReportPageClientProps {
   report: Report | null;
@@ -49,9 +52,11 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
     );
   }
 
+  // Rank all findings first so preview mode surfaces the most important ones.
+  const rankedFindings = rankFindings(report.findings);
   const visibleFindings = report.isPreview
-    ? report.findings.slice(0, PREVIEW_FINDINGS_LIMIT)
-    : report.findings;
+    ? rankedFindings.slice(0, PREVIEW_FINDINGS_LIMIT)
+    : rankedFindings;
 
   const visibleClauses = report.isPreview
     ? report.clauseCards.slice(0, PREVIEW_CLAUSE_CARDS_LIMIT)
@@ -71,6 +76,19 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
         </div>
 
         <VerdictHeader verdict={report.verdict} />
+
+        {/* Priority summary — most important issues right now */}
+        <PrioritySummary findings={report.findings} />
+
+        {/* User Q&A */}
+        {report.userQuestion && report.userAnswer && (
+          <div className="mt-6">
+            <UserQuestionAnswer
+              userQuestion={report.userQuestion}
+              userAnswer={report.userAnswer}
+            />
+          </div>
+        )}
 
         {/* Export buttons */}
         <div className="mt-5 flex gap-2">

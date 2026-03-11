@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { ClauseCard } from "@/types/report";
+import { SimplifyBlock } from "./simplify-block";
 
 function Section({
   title,
@@ -54,6 +55,7 @@ export function ClauseCardFull({ clause }: { clause: ClauseCard }) {
             <p className="max-w-prose text-sm leading-relaxed text-foreground/80">
               {clause.whatItMeans}
             </p>
+            <SimplifyBlock text={clause.whatItMeans} />
           </Section>
 
           {/* What could happen */}

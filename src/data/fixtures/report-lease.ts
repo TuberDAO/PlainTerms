@@ -23,6 +23,9 @@ export const reportLease: Report = {
       shortWhy:
         "The required notice period is well below the standard 24 hours, giving the landlord wide access rights.",
       relatedClauseIds: ["c-lea-1"],
+      impactType: "admin-trap",
+      actionTiming: "before-signing",
+      decisionRelevance: "decision-critical",
     },
     {
       id: "f-lea-2",
@@ -33,6 +36,9 @@ export const reportLease: Report = {
       shortWhy:
         "The landlord can deduct from your deposit for 'damage beyond fair wear and tear' without defining what that means.",
       relatedClauseIds: ["c-lea-2"],
+      impactType: "cost",
+      actionTiming: "before-signing",
+      decisionRelevance: "decision-critical",
     },
     {
       id: "f-lea-3",
@@ -43,6 +49,9 @@ export const reportLease: Report = {
       shortWhy:
         "Breaking the lease early means paying all remaining months' rent in full.",
       relatedClauseIds: ["c-lea-3"],
+      impactType: "cancellation",
+      actionTiming: "before-cancellation",
+      decisionRelevance: "important",
     },
     {
       id: "f-lea-4",
@@ -53,6 +62,9 @@ export const reportLease: Report = {
       shortWhy:
         "After the fixed term, rent can be increased by any amount with just one month's notice.",
       relatedClauseIds: ["c-lea-4"],
+      impactType: "cost",
+      actionTiming: "before-renewal",
+      decisionRelevance: "important",
     },
     {
       id: "f-lea-5",
@@ -63,6 +75,9 @@ export const reportLease: Report = {
       shortWhy:
         "You may be responsible for repairs that would typically fall to the landlord.",
       relatedClauseIds: ["c-lea-5"],
+      impactType: "cost",
+      actionTiming: "if-problem-occurs",
+      decisionRelevance: "monitor",
     },
     {
       id: "f-lea-6",
@@ -73,6 +88,9 @@ export const reportLease: Report = {
       shortWhy:
         "The agreement is silent on who handles pest issues, which usually defaults to the tenant.",
       relatedClauseIds: ["c-lea-6"],
+      impactType: "other",
+      actionTiming: "if-problem-occurs",
+      decisionRelevance: "background",
     },
   ],
   paywalledFindingsCount: 3,
@@ -205,4 +223,6 @@ export const reportLease: Report = {
       },
     ],
   },
+  userQuestion: null,
+  userAnswer: null,
 };

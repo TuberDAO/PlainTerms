@@ -28,6 +28,9 @@ export const MOCK_REPORT: Report = {
       shortWhy:
         "The contract renews automatically and requires 60 days written notice to cancel.",
       relatedClauseIds: ["c-1"],
+      impactType: "renewal",
+      actionTiming: "before-renewal",
+      decisionRelevance: "decision-critical",
     },
     {
       id: "f-2",
@@ -38,6 +41,9 @@ export const MOCK_REPORT: Report = {
       shortWhy:
         "If something goes wrong, the most you can recover is what you paid last year.",
       relatedClauseIds: ["c-2"],
+      impactType: "weak-remedy",
+      actionTiming: "if-problem-occurs",
+      decisionRelevance: "important",
     },
     {
       id: "f-3",
@@ -48,6 +54,9 @@ export const MOCK_REPORT: Report = {
       shortWhy:
         "Your personal data may be shared with third-party partners for marketing purposes.",
       relatedClauseIds: ["c-3"],
+      impactType: "privacy",
+      actionTiming: "ongoing",
+      decisionRelevance: "monitor",
     },
   ],
   paywalledFindingsCount: 0,
@@ -126,4 +135,6 @@ export const MOCK_REPORT: Report = {
       },
     ],
   },
+  userQuestion: null,
+  userAnswer: null,
 };
