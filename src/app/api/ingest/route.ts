@@ -10,9 +10,14 @@ import {
   type FileKind,
 } from "@/lib/ingest/parse";
 import { chunkText } from "@/lib/ingest/chunk";
+import {
+  detectSections,
+  type DocumentSection,
+} from "@/lib/ingest/sections";
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
-const MAX_EXTRACTED_CHARS = 250_000;
+const HARD_MAX_EXTRACTED_CHARS = 400_000;
+const LARGE_DOC_SECTION_THRESHOLD = 150_000;
 
 interface IngestResponse {
   ok: true;
@@ -23,6 +28,7 @@ interface IngestResponse {
   fingerprint: string;
   chunkCount: number;
   chunks: string[];
+  sections?: DocumentSection[];
 }
 
 function fingerprint(text: string): string {
@@ -102,13 +108,24 @@ export async function POST(request: NextRequest) {
     let normalized = normalizeText(rawText);
 
     let isTruncated = false;
-    if (normalized.length > MAX_EXTRACTED_CHARS) {
-      normalized = normalized.slice(0, MAX_EXTRACTED_CHARS);
+    if (normalized.length > HARD_MAX_EXTRACTED_CHARS) {
+      normalized = normalized.slice(0, HARD_MAX_EXTRACTED_CHARS);
       isTruncated = true;
     }
 
     const fp = fingerprint(normalized);
     const { chunks, chunkCount } = chunkText(normalized);
+
+    let sections: DocumentSection[] | undefined;
+    if (normalized.length >= LARGE_DOC_SECTION_THRESHOLD) {
+      sections = detectSections(chunks);
+      console.log("[ingest] section detection", {
+        charCount: normalized.length,
+        chunkCount,
+        sectionCount: sections.length,
+        sectionLabels: sections.map((s) => s.label),
+      });
+    }
 
     console.log("[ingest]", {
       sourceType,
@@ -116,6 +133,7 @@ export async function POST(request: NextRequest) {
       chunkCount,
       fingerprintLast4: fp.slice(-4),
       isTruncated,
+      isLargeDoc: normalized.length >= LARGE_DOC_SECTION_THRESHOLD,
     });
 
     const response: IngestResponse = {
@@ -127,6 +145,7 @@ export async function POST(request: NextRequest) {
       fingerprint: fp,
       chunkCount,
       chunks,
+      ...(sections ? { sections } : {}),
     };
 
     return NextResponse.json(response);

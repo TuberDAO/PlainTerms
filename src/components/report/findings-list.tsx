@@ -52,13 +52,14 @@ const CARD_STYLES: Record<string, string> = {
   background: "rounded-xl border bg-muted/30 p-5 opacity-70 transition-shadow hover:shadow-sm hover:opacity-100 sm:p-6",
 };
 
-export function FindingsList({ findings }: { findings: Finding[] }) {
-  // Only apply metadata-based card styling when metadata is high-confidence.
+export function FindingsList({ findings, heading }: { findings: Finding[]; heading?: string }) {
   const lowConfidence = isMetadataLowConfidence(findings);
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold sm:text-xl">Findings</h2>
+      {heading !== undefined && (
+        <h2 className="text-lg font-semibold sm:text-xl">{heading}</h2>
+      )}
       {findings.map((finding) => {
         const cardClass =
           !lowConfidence && finding.decisionRelevance

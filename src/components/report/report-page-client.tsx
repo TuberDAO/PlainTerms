@@ -16,6 +16,7 @@ import {
 import { Download, Share2, AlertTriangle } from "lucide-react";
 import { UserQuestionAnswer } from "@/components/report/user-question-answer";
 import { PrioritySummary } from "@/components/report/priority-summary";
+import { CoverageStatusBlock } from "@/components/report/coverage-status";
 import { track } from "@/lib/analytics/tracker";
 import {
   PREVIEW_FINDINGS_LIMIT,
@@ -52,11 +53,19 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
     );
   }
 
-  // Rank all findings first so preview mode surfaces the most important ones.
   const rankedFindings = rankFindings(report.findings);
+  const hasTopIssues = !report.isPreview && Array.isArray(report.topIssues) && report.topIssues.length > 0;
+  const hasAllBySection = !report.isPreview && Array.isArray(report.allIssuesBySection) && report.allIssuesBySection.length > 0;
+  const totalSectionIssues = hasAllBySection
+    ? report.allIssuesBySection!.reduce((s, sec) => s + sec.issues.length, 0)
+    : 0;
+  const showSectionView = hasAllBySection && totalSectionIssues > (report.topIssues?.length ?? 0);
+
   const visibleFindings = report.isPreview
     ? rankedFindings.slice(0, PREVIEW_FINDINGS_LIMIT)
-    : rankedFindings;
+    : hasTopIssues
+      ? report.topIssues!
+      : rankedFindings;
 
   const visibleClauses = report.isPreview
     ? report.clauseCards.slice(0, PREVIEW_CLAUSE_CARDS_LIMIT)
@@ -76,6 +85,11 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
         </div>
 
         <VerdictHeader verdict={report.verdict} />
+
+        {/* Coverage status — shows what was analysed */}
+        {report.coverageStatus && (
+          <CoverageStatusBlock coverageStatus={report.coverageStatus} />
+        )}
 
         {/* Priority summary — most important issues right now */}
         <PrioritySummary findings={report.findings} />
@@ -124,15 +138,40 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
           </TooltipProvider>
         </div>
 
-        {/* Findings */}
+        {/* Findings — topIssues when available, full list otherwise */}
         <div className="mt-10">
-          <FindingsList findings={visibleFindings} />
+          <FindingsList
+            findings={visibleFindings}
+            heading={hasTopIssues ? "Key findings" : "Findings"}
+          />
         </div>
 
         {/* Paywall block */}
         {report.isPreview && report.paywalledFindingsCount > 0 && (
           <div className="mt-6">
             <PaywallBlock count={report.paywalledFindingsCount} />
+          </div>
+        )}
+
+        {/* All findings by section — full coverage for non-preview large-doc reports */}
+        {showSectionView && (
+          <div className="mt-12">
+            <h2 className="text-lg font-semibold sm:text-xl">
+              All findings by section
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Complete issue coverage across {report.allIssuesBySection!.length}{" "}
+              section{report.allIssuesBySection!.length !== 1 ? "s" : ""} ({totalSectionIssues}{" "}
+              total)
+            </p>
+            {report.allIssuesBySection!.map((section) => (
+              <div key={section.sectionLabel} className="mt-6">
+                <h3 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                  {section.sectionLabel}
+                </h3>
+                <FindingsList findings={section.issues} />
+              </div>
+            ))}
           </div>
         )}
 

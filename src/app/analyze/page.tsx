@@ -28,6 +28,11 @@ const GENERATE_STAGES = [
   { label: "Saving your report", pct: 93, durationMs: 4000 },
 ] as const;
 
+interface IngestSection {
+  label: string;
+  chunkIndices: number[];
+}
+
 interface IngestResult {
   ok: true;
   sourceType: "pdf" | "docx" | "text";
@@ -37,6 +42,7 @@ interface IngestResult {
   fingerprint: string;
   chunkCount: number;
   chunks: string[];
+  sections?: IngestSection[];
 }
 
 function AnalyzeContent() {
@@ -64,6 +70,8 @@ function AnalyzeContent() {
   const [showTechDetails, setShowTechDetails] = useState(false);
   const [questionText, setQuestionText] = useState("");
   const [personalContext, setPersonalContext] = useState("");
+  const [allSectionsSelected, setAllSectionsSelected] = useState(true);
+  const [sectionToggles, setSectionToggles] = useState<boolean[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const audienceContext =
@@ -137,6 +145,11 @@ function AnalyzeContent() {
       const result = data as IngestResult;
       setIngestResult(result);
 
+      if (result.sections) {
+        setAllSectionsSelected(true);
+        setSectionToggles(result.sections.map(() => true));
+      }
+
       try {
         sessionStorage.setItem(
           "pt:lastIngest",
@@ -148,6 +161,7 @@ function AnalyzeContent() {
             title: result.title,
             charCount: result.charCount,
             isTruncated: result.isTruncated,
+            sections: result.sections,
           }),
         );
       } catch {
@@ -242,6 +256,18 @@ function AnalyzeContent() {
       setGenerateStage("Analysing contract");
       setGeneratePct(20);
 
+      const hasSections = payload.sections && payload.sections.length > 0;
+      let selectedIndices: number[] | undefined;
+      if (hasSections) {
+        if (allSectionsSelected) {
+          selectedIndices = payload.sections!.map((_: IngestSection, i: number) => i);
+        } else {
+          selectedIndices = sectionToggles
+            .map((on, i) => (on ? i : -1))
+            .filter((i) => i >= 0);
+        }
+      }
+
       const res = await fetch("/api/report/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -261,6 +287,12 @@ function AnalyzeContent() {
           contractTypeHint: contractTypeHint || undefined,
           personalContext: personalContext.trim() || undefined,
           question: questionText.trim() || undefined,
+          ...(hasSections
+            ? {
+                sections: payload.sections,
+                selectedSectionIndices: selectedIndices,
+              }
+            : {}),
         }),
       });
 
@@ -347,8 +379,10 @@ function AnalyzeContent() {
         <Card className="mt-10 rounded-xl">
           <CardContent className="p-6 sm:p-8">
             {/* Text input */}
-            <label className="text-sm font-medium">Contract text</label>
+            <label htmlFor="pt-contract-text" className="text-sm font-medium">Contract text</label>
             <textarea
+              id="pt-contract-text"
+              name="contractText"
               className="mt-2 min-h-[200px] w-full rounded-lg border bg-background px-4 py-3 text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
               placeholder="Paste your contract clause or full document here..."
               value={text}
@@ -439,12 +473,81 @@ function AnalyzeContent() {
                 </div>
                 <p className="mt-1 pl-6 text-xs text-muted-foreground">
                   Next: Generate report.
-                  {ingestResult.isTruncated && (
-                    <span className="ml-1 text-amber-600">
-                      (Document was truncated to fit processing limits.)
-                    </span>
-                  )}
                 </p>
+                {ingestResult.isTruncated && (
+                  <p className="mt-1 pl-6 text-xs text-amber-600">
+                    This document exceeded the maximum size and was truncated.
+                    Some late sections may not be covered.
+                  </p>
+                )}
+                {ingestResult.charCount >= 150_000 && !ingestResult.isTruncated && (
+                  <p className="mt-1.5 pl-6 text-xs text-blue-600">
+                    Large document detected — multi-pass analysis will be used
+                    for deeper coverage.
+                  </p>
+                )}
+
+                {/* Section selection for large documents */}
+                {ingestResult.sections && ingestResult.sections.length > 0 && (
+                  <div className="mt-3 ml-6 rounded-lg border border-blue-100 bg-blue-50/40 p-3">
+                    <fieldset>
+                      <legend className="text-xs font-medium text-foreground">
+                        Document sections
+                      </legend>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+                        Choose which sections to analyse. All sections are included by default.
+                      </p>
+                      <label className="mt-2 flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={allSectionsSelected}
+                          onChange={(e) => {
+                            setAllSectionsSelected(e.target.checked);
+                            if (e.target.checked) {
+                              setSectionToggles(
+                                ingestResult.sections!.map(() => true),
+                              );
+                            }
+                          }}
+                          className="h-3.5 w-3.5 rounded border-gray-300"
+                        />
+                        <span className="font-medium">All sections</span>
+                      </label>
+                      <div className="mt-1.5 space-y-1 pl-5">
+                        {ingestResult.sections.map((sec, i) => (
+                          <label
+                            key={i}
+                            className="flex items-center gap-2 text-xs text-muted-foreground"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={
+                                allSectionsSelected || (sectionToggles[i] ?? true)
+                              }
+                              disabled={allSectionsSelected}
+                              onChange={(e) => {
+                                const next = [...sectionToggles];
+                                next[i] = e.target.checked;
+                                setSectionToggles(next);
+                              }}
+                              className="h-3 w-3 rounded border-gray-300"
+                            />
+                            <span>{sec.label}</span>
+                            <span className="text-muted-foreground/50">
+                              ({sec.chunkIndices.length}{" "}
+                              {sec.chunkIndices.length === 1 ? "chunk" : "chunks"})
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      {!allSectionsSelected && (
+                        <p className="mt-2 text-[11px] text-amber-600">
+                          The report will cover only the selected sections.
+                        </p>
+                      )}
+                    </fieldset>
+                  </div>
+                )}
 
                 {/* Collapsible technical details */}
                 <button
@@ -683,7 +786,7 @@ function AnalyzeContent() {
                 </div>
 
                 {generating ? (
-                  <div className="mt-5 ml-6 rounded-xl border border-green-200 bg-green-50/60 p-5">
+                  <div className="mt-5 rounded-xl border border-green-200 bg-green-50/60 p-5">
                     <p className="text-sm font-semibold text-green-900">
                       {generateStage}
                     </p>
@@ -695,7 +798,9 @@ function AnalyzeContent() {
                     </div>
                     <p className="mt-2.5 text-xs text-green-700/80">
                       {generatePct < 55
-                        ? "Longer documents can take a little longer — we're reading everything carefully."
+                        ? ingestResult && ingestResult.charCount >= 150_000
+                          ? "Multi-pass analysis in progress — this takes longer for large documents."
+                          : "Longer documents can take a little longer — we're reading everything carefully."
                         : "Almost ready. Please keep this tab open."}
                     </p>
                   </div>
@@ -704,20 +809,22 @@ function AnalyzeContent() {
                     {generateError && (
                       <div
                         role="alert"
-                        className="mt-3 ml-6 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                        className="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
                       >
                         {generateError}
                       </div>
                     )}
-                    <Button
-                      size="sm"
-                      className="mt-4 ml-6 gap-2"
-                      onClick={handleGenerateReport}
-                      disabled={generating}
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                      Generate report
-                    </Button>
+                    <div className="mt-6 flex justify-center">
+                      <Button
+                        size="lg"
+                        className="gap-2 rounded-lg px-8 font-semibold shadow-sm"
+                        onClick={handleGenerateReport}
+                        disabled={generating}
+                      >
+                        <FileText className="h-4 w-4" />
+                        Generate PlainTerms report
+                      </Button>
+                    </div>
                   </>
                 )}
               </div>
@@ -725,19 +832,21 @@ function AnalyzeContent() {
 
             {/* Action buttons */}
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Button
-                size="lg"
-                className="flex-1 gap-2 rounded-lg font-semibold shadow-sm"
-                onClick={handleIngest}
-                disabled={ingesting || !hasInput}
-              >
-                {ingesting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <FileText className="h-4 w-4" />
-                )}
-                {ingesting ? "Analyzing..." : "Analyze"}
-              </Button>
+              {!ingestResult && (
+                <Button
+                  size="lg"
+                  className="flex-1 gap-2 rounded-lg font-semibold shadow-sm"
+                  onClick={handleIngest}
+                  disabled={ingesting || !hasInput}
+                >
+                  {ingesting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="h-4 w-4" />
+                  )}
+                  {ingesting ? "Importing document..." : "Import and analyze"}
+                </Button>
+              )}
               <Button
                 size="lg"
                 variant="outline"
@@ -747,17 +856,19 @@ function AnalyzeContent() {
                 <Eye className="h-4 w-4" />
                 View example report
               </Button>
-              <Button
-                variant="outline"
-                size="lg"
-                className="flex-1 gap-2 rounded-lg"
-                asChild
-              >
-                <Link href="/account">
-                  <LogIn className="h-4 w-4" />
-                  Sign in to save
-                </Link>
-              </Button>
+              {!ingestResult && (
+                <Button
+                  variant="outline"
+                  size="lg"
+                  className="flex-1 gap-2 rounded-lg"
+                  asChild
+                >
+                  <Link href="/account">
+                    <LogIn className="h-4 w-4" />
+                    Sign in to save
+                  </Link>
+                </Button>
+              )}
             </div>
 
             <p className="mt-5 text-center text-xs text-muted-foreground">

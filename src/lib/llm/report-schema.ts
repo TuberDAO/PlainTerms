@@ -99,6 +99,21 @@ const DecisionRelevanceSchema = z.enum([
   "background",
 ]);
 
+const MechanismTypeSchema = z.enum([
+  "arbitration",
+  "class_action_waiver",
+  "subrogation_reimbursement",
+  "coordination_of_benefits",
+  "prior_authorization",
+  "medical_necessity_discretion",
+  "network_limitation",
+  "step_therapy",
+  "appeal_deadline",
+  "termination_rescission",
+  "premium_rate_change",
+  "other",
+]);
+
 const FindingSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -110,6 +125,13 @@ const FindingSchema = z.object({
   impactType: ImpactTypeSchema.optional().default("other"),
   actionTiming: ActionTimingSchema.optional().default("before-signing"),
   decisionRelevance: DecisionRelevanceSchema.optional().default("important"),
+  mechanismType: MechanismTypeSchema.optional(),
+  sectionLabel: z.string().optional(),
+});
+
+const SectionIssuesSchema = z.object({
+  sectionLabel: z.string(),
+  issues: z.array(FindingSchema),
 });
 
 export const ReportSchema = z.object({
@@ -133,6 +155,17 @@ export const ReportSchema = z.object({
   }),
   userQuestion: z.string().nullable().optional().default(null),
   userAnswer: z.string().nullable().optional().default(null),
+  coverageStatus: z
+    .object({
+      mode: z.enum(["full", "selected-sections"]),
+      analyzedSections: z.array(z.string()),
+      skippedSections: z.array(z.string()),
+    })
+    .nullable()
+    .optional()
+    .default(null),
+  topIssues: z.array(FindingSchema).optional(),
+  allIssuesBySection: z.array(SectionIssuesSchema).optional(),
 });
 
 export function parseReportJson(raw: string): Report {

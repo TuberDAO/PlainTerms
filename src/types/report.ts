@@ -89,6 +89,20 @@ export type DecisionRelevance =
   | "monitor"
   | "background";
 
+export type MechanismType =
+  | "arbitration"
+  | "class_action_waiver"
+  | "subrogation_reimbursement"
+  | "coordination_of_benefits"
+  | "prior_authorization"
+  | "medical_necessity_discretion"
+  | "network_limitation"
+  | "step_therapy"
+  | "appeal_deadline"
+  | "termination_rescission"
+  | "premium_rate_change"
+  | "other";
+
 export interface Finding {
   id: string;
   title: string;
@@ -100,6 +114,19 @@ export interface Finding {
   impactType: ImpactType;
   actionTiming: ActionTiming;
   decisionRelevance: DecisionRelevance;
+  mechanismType?: MechanismType;
+  sectionLabel?: string;
+}
+
+export interface SectionIssues {
+  sectionLabel: string;
+  issues: Finding[];
+}
+
+export interface CoverageStatus {
+  mode: "full" | "selected-sections";
+  analyzedSections: string[];
+  skippedSections: string[];
 }
 
 export interface Report {
@@ -123,6 +150,9 @@ export interface Report {
   };
   userQuestion: string | null;
   userAnswer: string | null;
+  coverageStatus?: CoverageStatus | null;
+  topIssues?: Finding[];
+  allIssuesBySection?: SectionIssues[];
 }
 
 export interface HeroExample {

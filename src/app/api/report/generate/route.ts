@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createRouteHandlerClient } from "@/lib/supabase/server";
-import { runReportAnalysis } from "@/lib/llm/openai";
+import { runReportAnalysis, LARGE_DOC_THRESHOLD_CHARS } from "@/lib/llm/openai";
 import { createReport } from "@/lib/reports";
+import { checkDocumentRelevance } from "@/lib/llm/relevance-check";
 
 let reqCounter = 0;
 function nextRequestId(): string {
@@ -51,6 +52,8 @@ export async function POST(request: NextRequest) {
       contractTypeHint,
       personalContext,
       question,
+      sections,
+      selectedSectionIndices,
     } = body;
 
     if (
@@ -63,12 +66,41 @@ export async function POST(request: NextRequest) {
       return jsonError("Invalid ingest payload.", 400);
     }
 
+    const totalCharCount: number =
+      typeof ingest.charCount === "number"
+        ? ingest.charCount
+        : ingest.chunks.reduce((s: number, c: string) => s + c.length, 0);
+    const isLargeDoc = totalCharCount >= LARGE_DOC_THRESHOLD_CHARS;
+
     log("input_validated", {
       chunkCount: ingest.chunks.length,
-      charCount: ingest.charCount,
+      charCount: totalCharCount,
       sourceType: ingest.sourceType,
       fingerprintLast4: ingest.fingerprint.slice(-4),
+      isLargeDoc,
     });
+
+    if (isLargeDoc) {
+      const relevance = checkDocumentRelevance(ingest.chunks);
+      log("relevance_check", {
+        relevant: relevance.relevant,
+        confidence: relevance.confidence,
+        distinctKeywords: relevance.distinctKeywordsFound,
+      });
+      if (!relevance.relevant) {
+        return jsonError(
+          "This file does not appear to be the kind of contract, policy, or legal terms document " +
+            "PlainTerms is designed to analyse. If this is a contract document, try selecting a specific contract type.",
+          422,
+          { code: "NOT_RELEVANT" },
+        );
+      }
+    }
+
+    const parsedSections =
+      Array.isArray(sections) ? sections : undefined;
+    const parsedSelectedIndices =
+      Array.isArray(selectedSectionIndices) ? selectedSectionIndices : undefined;
 
     log("llm_analysis_started");
     let report;
@@ -101,14 +133,32 @@ export async function POST(request: NextRequest) {
         chunkCount: ingest.chunkCount ?? ingest.chunks.length,
         fingerprint: ingest.fingerprint,
         sourceType: ingest.sourceType ?? "text",
+        sections: parsedSections,
+        selectedSectionIndices: parsedSelectedIndices,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown LLM error";
+      const code = (err as unknown as Record<string, unknown>)?.code;
       log("llm_analysis_failed", {
         error: msg,
+        code: code ?? undefined,
         ...(isDev && err instanceof Error ? { stack: err.stack } : {}),
       });
-      return jsonError("Failed to generate report. Please try again.", 500);
+
+      if (code === "TRUNCATED_OUTPUT") {
+        return jsonError(
+          "This document produced a very large analysis that could not be completed in one pass. " +
+          "Try selecting a specific contract type or reducing the document length.",
+          500,
+          { code: "TRUNCATED_OUTPUT" },
+        );
+      }
+
+      return jsonError(
+        "Failed to generate report. Please try again.",
+        500,
+        isDev ? { detail: msg } : undefined,
+      );
     }
 
     log("llm_analysis_completed", {

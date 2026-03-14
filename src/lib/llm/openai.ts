@@ -1,10 +1,11 @@
 import OpenAI from "openai";
 import { parseReportJson } from "./report-schema";
 import { MOCK_REPORT } from "./mock-report";
-import type { Report } from "@/types/report";
-import { anthropicGenerateText, type AnthropicResult } from "./anthropic";
+import type { Report, Finding, SectionIssues } from "@/types/report";
+import { anthropicGenerateText, isTransientTransportError, type AnthropicResult } from "./anthropic";
 import { normalizeLlmOutput } from "@/lib/text/normalize-llm-output";
 import { resolveContractPolicy } from "@/lib/llm/contract-family-policy";
+import { rankFindings } from "@/lib/report/rank-findings";
 
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 
@@ -12,6 +13,8 @@ function getOpenAIModel(): string {
   return process.env.PLAINTERMS_OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
 }
 const MAX_OUTPUT_TOKENS = 8192;
+/** @deprecated Kept for reference; large-doc now uses per-section budgets. */
+const _SYNTHESIS_MAX_OUTPUT_TOKENS_LEGACY = 16_384;
 const TEMPERATURE = 0.3;
 
 export interface AnalysisInput {
@@ -26,6 +29,8 @@ export interface AnalysisInput {
   chunkCount: number;
   fingerprint: string;
   sourceType: string;
+  sections?: { label: string; chunkIndices: number[] }[];
+  selectedSectionIndices?: number[];
 }
 
 /**
@@ -207,7 +212,8 @@ OUTPUT SCHEMA — return a JSON object with exactly these fields:
       "relatedClauseIds": ["<clause IDs from clauseCards>"],
       "impactType": "<cost|service-loss|cancellation|renewal|coverage|billing|usage-restriction|privacy|weak-remedy|linked-agreement|admin-trap|other>",
       "actionTiming": "<before-signing|before-renewal|before-cancellation|before-claim|if-problem-occurs|ongoing|info-only>",
-      "decisionRelevance": "<decision-critical|important|monitor|background>"
+      "decisionRelevance": "<decision-critical|important|monitor|background>",
+      "mechanismType": "<arbitration|class_action_waiver|subrogation_reimbursement|coordination_of_benefits|prior_authorization|medical_necessity_discretion|network_limitation|step_therapy|appeal_deadline|termination_rescission|premium_rate_change|other>"
     }
   ],
   "paywalledFindingsCount": 0,
@@ -267,6 +273,20 @@ decisionRelevance — how important this is to the consumer's present decision:
 - "monitor": something to watch during the contract term
 - "background": low-priority context that is useful to know
 
+mechanismType — the specific legal or contractual mechanism this finding represents:
+- "arbitration": mandatory arbitration clause
+- "class_action_waiver": waiver of class action rights
+- "subrogation_reimbursement": subrogation or reimbursement obligations
+- "coordination_of_benefits": coordination of benefits with other coverage
+- "prior_authorization": prior authorization or pre-approval requirements
+- "medical_necessity_discretion": provider discretion over medical necessity
+- "network_limitation": in-network vs out-of-network restrictions
+- "step_therapy": step therapy or fail-first requirements
+- "appeal_deadline": appeal or dispute filing deadlines
+- "termination_rescission": termination, rescission, or cancellation mechanisms
+- "premium_rate_change": premium or rate change provisions
+- "other": only when no specific mechanism type fits
+
 Do NOT assign these randomly. Each must be grounded in what the document text actually says. When in doubt, prefer the more conservative/actionable option.
 
 GUIDELINES:
@@ -294,6 +314,64 @@ const QC_RETRY_JSON_CAP = 30_000;
 
 const DEFAULT_MAX_INPUT_CHARS = 96_000;
 const DEFAULT_MAX_INPUT_CHARS_OPUS = 288_000;
+
+const LARGE_DOC_CHAR_THRESHOLD = 120_000;
+
+const RESCUE_MAX_PARTIAL_CHARS = 24_000;
+
+/**
+ * Detect whether a raw string is likely incomplete/truncated JSON.
+ * Uses cheap heuristics — no full parse needed.  Exported for testing.
+ */
+export function isLikelyIncompleteJson(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return true;
+
+  let braces = 0;
+  let brackets = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") braces++;
+    else if (ch === "}") braces--;
+    else if (ch === "[") brackets++;
+    else if (ch === "]") brackets--;
+  }
+
+  if (braces !== 0 || brackets !== 0) return true;
+  if (inString) return true;
+
+  const lastNonWs = trimmed[trimmed.length - 1];
+  if (lastNonWs !== "}" && lastNonWs !== "]") return true;
+
+  return false;
+}
+
+/**
+ * For very large documents, return extra system instructions that encourage
+ * the model to produce more compact output to avoid hitting output token limits.
+ * Returns an empty string for normal-sized documents.
+ */
+function buildCompactOutputInstruction(totalInputChars: number): string {
+  if (totalInputChars < LARGE_DOC_CHAR_THRESHOLD) return "";
+  return `
+
+IMPORTANT — COMPACT OUTPUT MODE (large document detected):
+This is a large document. To ensure the full JSON response fits within output limits:
+- Keep verdict.summary to 2-3 sentences max.
+- Keep each shortWhy to 1 concise sentence.
+- Keep each scenario to 2-3 sentences max.
+- Keep goDeeper fields brief (1-2 sentences) or omit if not essential.
+- Keep letterTemplate bodies to the key points only.
+- Do NOT sacrifice finding quality or coverage — still surface all material issues.
+- Prioritise completing valid JSON over verbose descriptions.
+- Close all JSON arrays and objects properly before running out of space.`;
+}
 
 export function getMaxInputChars(backend: string, model?: string): number {
   if (backend === "anthropic" && model?.includes("opus")) {
@@ -407,6 +485,34 @@ function patchReportDefaults(raw: string): string {
         if (!f.decisionRelevance) f.decisionRelevance = "important";
       }
     }
+
+    if (Array.isArray(obj.topIssues)) {
+      for (let i = 0; i < obj.topIssues.length; i++) {
+        const f = obj.topIssues[i];
+        if (!f.id) f.id = `ti-${i + 1}`;
+        if (!Array.isArray(f.tags)) f.tags = [];
+        if (!Array.isArray(f.relatedClauseIds)) f.relatedClauseIds = [];
+        if (!f.impactType) f.impactType = "other";
+        if (!f.actionTiming) f.actionTiming = "before-signing";
+        if (!f.decisionRelevance) f.decisionRelevance = "important";
+      }
+    }
+
+    if (Array.isArray(obj.allIssuesBySection)) {
+      for (const section of obj.allIssuesBySection) {
+        if (Array.isArray(section.issues)) {
+          for (let i = 0; i < section.issues.length; i++) {
+            const f = section.issues[i];
+            if (!f.id) f.id = `si-${i + 1}`;
+            if (!Array.isArray(f.tags)) f.tags = [];
+            if (!Array.isArray(f.relatedClauseIds)) f.relatedClauseIds = [];
+            if (!f.impactType) f.impactType = "other";
+            if (!f.actionTiming) f.actionTiming = "before-signing";
+            if (!f.decisionRelevance) f.decisionRelevance = "important";
+          }
+        }
+      }
+    }
     if (Array.isArray(obj.clauseCards)) {
       for (let i = 0; i < obj.clauseCards.length; i++) {
         const c = obj.clauseCards[i];
@@ -417,6 +523,7 @@ function patchReportDefaults(raw: string): string {
 
     if (obj.userQuestion === undefined) obj.userQuestion = null;
     if (obj.userAnswer === undefined) obj.userAnswer = null;
+    if (obj.coverageStatus === undefined) obj.coverageStatus = null;
 
     return JSON.stringify(obj);
   } catch {
@@ -822,6 +929,16 @@ export async function runReportAnalysis(
     return report;
   }
 
+  const totalDocChars = input.chunks.reduce((s, c) => s + c.length, 0);
+  if (totalDocChars >= LARGE_DOC_THRESHOLD_CHARS) {
+    console.log("[llm] routing to large-doc-mode", {
+      totalDocChars,
+      threshold: LARGE_DOC_THRESHOLD_CHARS,
+      chunkCount: input.chunks.length,
+    });
+    return runLargeDocAnalysis(input, options);
+  }
+
   const backend = options?.backend ?? getBackend();
   const effectiveMaxTokens = options?.maxOutputTokens ?? MAX_OUTPUT_TOKENS;
   const effectiveTemp = options?.temperature ?? TEMPERATURE;
@@ -855,6 +972,8 @@ export async function runReportAnalysis(
     });
   }
 
+  const totalInputChars = chunksToSend.reduce((s, c) => s + c.length, 0);
+
   const familyPolicy = resolveContractPolicy(
     undefined, // contractFamily is model-inferred — we use the type hint
     input.contractTypeHint,
@@ -863,7 +982,8 @@ export async function runReportAnalysis(
     SYSTEM_PROMPT +
     buildLocaleInstruction(input.locale) +
     "\n\n" +
-    familyPolicy.instruction;
+    familyPolicy.instruction +
+    buildCompactOutputInstruction(totalInputChars);
 
   let userContent = "";
   if (input.title) {
@@ -922,12 +1042,16 @@ export async function runReportAnalysis(
   try {
     report = parseReportJson(patchReportDefaults(responseText));
   } catch (parseErr) {
-    const isTruncation =
+    // Detect whether this is a truncation/incomplete-JSON situation.
+    const likelyIncomplete = isLikelyIncompleteJson(responseText);
+    const providerTruncation =
       backend === "anthropic" &&
-      parseErr instanceof SyntaxError &&
       (anthropicMeta?.stopReason === "max_tokens" ||
         (anthropicMeta?.usage?.outputTokens != null &&
           anthropicMeta.usage.outputTokens >= effectiveMaxTokens - 50));
+    const isTruncation =
+      (providerTruncation || likelyIncomplete) &&
+      parseErr instanceof SyntaxError;
 
     if (!isTruncation) {
       const err =
@@ -941,56 +1065,85 @@ export async function runReportAnalysis(
       throw err;
     }
 
-    const newMaxTokens = Math.min(Math.max(effectiveMaxTokens * 4, 3500), 8000);
-    console.log("[llm] anthropic truncation retry", {
+    // --- JSON RESCUE PASS (cheap, no full document resend) ---
+    // Send only the partial JSON to the same model and ask it to
+    // complete/repair into valid JSON. This is much cheaper than
+    // resending the entire 60K+ token document.
+    const partialJson = responseText.slice(0, RESCUE_MAX_PARTIAL_CHARS);
+    const rescueMaxTokens = Math.min(effectiveMaxTokens, 8192);
+
+    console.log("[llm] json-rescue", {
+      backend,
       model: resolvedModel,
-      previousMaxTokens: effectiveMaxTokens,
-      newMaxTokens,
-      stopReason: anthropicMeta?.stopReason,
+      stopReason: anthropicMeta?.stopReason ?? "syntax_error",
       outputTokens: anthropicMeta?.usage?.outputTokens,
+      partialJsonLen: responseText.length,
+      rescueInputLen: partialJson.length,
+      rescueMaxTokens,
     });
 
-    const truncRetryUser =
-      userContent +
-      "\n\nYour previous output was truncated mid-JSON. Redo the FULL response with these rules:" +
-      "\n- Output ONLY a single JSON object. No markdown, no commentary." +
-      "\n- You MUST output valid JSON (no trailing commas, no ellipses)." +
-      "\n- If output length is a risk, shorten string fields (e.g. shortWhy) but FINISH the JSON." +
-      "\n- Include all materially distinct findings supported by the document. Do not pad with filler." +
-      "\n- Keep exact schema field names (camelCase).";
+    const rescueSystem =
+      "You are a JSON repair assistant. You receive an incomplete JSON object that was truncated mid-output. " +
+      "Your ONLY job is to complete it into valid JSON. " +
+      "Rules:\n" +
+      "- Output ONLY valid JSON. No markdown, no commentary, no text before or after.\n" +
+      "- Preserve all existing content exactly as-is.\n" +
+      "- Close any open strings, arrays, and objects.\n" +
+      "- If arrays were clearly in progress, add a minimal closing entry if needed then close the array.\n" +
+      "- Do NOT invent new findings or data — only finish what was started.\n" +
+      "- The result must be a single JSON object with keys: verdict, findings, clauseCards, actions.\n" +
+      "- Be concise in any text you must generate to close structures.";
+
+    const rescueUser =
+      "The following JSON was truncated mid-output. Complete it into valid JSON:\n\n" +
+      partialJson;
 
     try {
-      const retryResult = await anthropicGenerateText({
-        system: systemContent,
-        user: truncRetryUser,
-        maxTokens: newMaxTokens,
-        temperature: effectiveTemp,
-        model: options?.model,
+      let rescueText: string;
+      if (backend === "anthropic") {
+        const rescueResult = await anthropicGenerateText({
+          system: rescueSystem,
+          user: rescueUser,
+          maxTokens: rescueMaxTokens,
+          temperature: 0,
+          model: options?.model,
+        });
+        rescueText = rescueResult.text;
+      } else {
+        rescueText = await callOpenAI([
+          { role: "system", content: rescueSystem },
+          { role: "user", content: rescueUser },
+        ], { ...oaiOverrides, maxTokens: rescueMaxTokens, temperature: 0 });
+      }
+
+      rescueText = extractJson(rescueText);
+      report = parseReportJson(patchReportDefaults(rescueText));
+      console.log("[llm] json-rescue succeeded", {
+        findings: report.findings.length,
+        clauseCards: report.clauseCards.length,
       });
-      responseText = extractJson(retryResult.text);
-      report = parseReportJson(patchReportDefaults(responseText));
-    } catch (retryErr) {
-      const err =
-        retryErr instanceof Error ? retryErr : new Error(String(retryErr));
-      (err as unknown as Record<string, unknown>).anthropicDebug = {
-        stopReason: anthropicMeta?.stopReason,
-        ...anthropicMeta?.usage,
-        retryMaxTokens: newMaxTokens,
-      };
+    } catch (rescueErr) {
+      const err = new Error(
+        `Report generation failed: model output was truncated (${responseText.length} chars) and JSON rescue could not recover. ` +
+        `Stop reason: ${anthropicMeta?.stopReason ?? "unknown"}. ` +
+        `Output tokens: ${anthropicMeta?.usage?.outputTokens ?? "unknown"}.`,
+      );
+      (err as unknown as Record<string, unknown>).code = "TRUNCATED_OUTPUT";
+      (err as unknown as Record<string, unknown>).rescueError =
+        rescueErr instanceof Error ? rescueErr.message : String(rescueErr);
       throw err;
     }
   }
 
   const maxRetries = options?.maxRetries ??
     (parseInt(process.env.PLAINTERMS_LLM_MAX_RETRIES ?? "1", 10) || 1);
-  const inputCharCount = chunksToSend.reduce((s, c) => s + c.length, 0);
   const quality = validateReportQuality(report);
 
   if (!quality.ok && maxRetries > 0) {
     console.log("[llm] quality gate failed, retrying", {
       issueCount: quality.issues.length,
       issues: quality.issues,
-      inputCharCount,
+      inputCharCount: totalInputChars,
     });
 
     const issueBlock =
@@ -1116,4 +1269,1300 @@ function normalizeReportText(r: Report): void {
   for (const t of r.actions.letterTemplates) {
     t.body = n(t.body);
   }
+}
+
+// ===========================================================================
+// LARGE DOCUMENT PIPELINE (2-stage: extract → synthesize)
+// ===========================================================================
+
+export const LARGE_DOC_THRESHOLD_CHARS = 150_000;
+const EXTRACTION_BATCH_SIZE = 4;
+const EXTRACTION_MAX_CONCURRENT = 3;
+export const EXTRACTION_MAX_OUTPUT_TOKENS = 3000;
+export const EXTRACTION_RETRY_OUTPUT_TOKENS = 5000;
+const EXTRACTION_MAX_RETRIES = 2;
+const EXTRACTION_BACKOFF_MS = [1000, 3000];
+/** @deprecated No longer used as a hard cap. Kept for export/test compatibility. */
+export const MAX_CANONICAL_ISSUES_PER_SECTION = 8;
+
+export const TOP_ISSUES_LIMIT = 10;
+
+export function computeTopIssues(findings: Finding[]): Finding[] {
+  return rankFindings(findings).slice(0, TOP_ISSUES_LIMIT);
+}
+
+export function buildAllIssuesBySection(findings: Finding[]): SectionIssues[] {
+  const groups = new Map<string, Finding[]>();
+  for (const f of findings) {
+    const label = f.sectionLabel ?? "Other";
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label)!.push(f);
+  }
+  return Array.from(groups.entries()).map(([sectionLabel, issues]) => ({
+    sectionLabel,
+    issues,
+  }));
+}
+
+export interface ChunkIssue {
+  clauseLabel: string;
+  excerpt: string;
+  shortWhy: string;
+  severity: string;
+  tags: string[];
+  impactType: string;
+  actionTiming: string;
+  decisionRelevance: string;
+  mechanismType?: string;
+}
+
+export interface SectionSummary {
+  sectionLabel: string;
+  coverageStatus: "complete" | "partial" | "failed";
+  sourceChunkCount: number;
+  rawIssueCount: number;
+  canonicalIssues: Array<{
+    title: string;
+    severity: "info" | "low" | "medium" | "high" | "critical";
+    shortWhy: string;
+    clauseLabel: string;
+    excerpt: string;
+    tags: string[];
+    impactType: string;
+    actionTiming: string;
+    decisionRelevance: string;
+    mechanismType?: string;
+  }>;
+}
+
+const SEVERITY_RANK: Record<string, number> = {
+  critical: 5, high: 4, medium: 3, low: 2, info: 1,
+};
+
+const RELEVANCE_RANK: Record<string, number> = {
+  "decision-critical": 4, important: 3, monitor: 2, background: 1,
+};
+
+function normalizeTitle(s: string): string {
+  return s.toLowerCase().replace(/[-–—]/g, " ").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+}
+
+export function buildSectionSummaries(
+  issuesByBatch: Map<number, ChunkIssue[]>,
+  sections: { label: string; chunkIndices: number[] }[] | undefined,
+  batchSize: number,
+  totalBatches: number,
+  failedBatchIndices: Set<number>,
+  totalChunkCount: number,
+): SectionSummary[] {
+  const allIssues: ChunkIssue[] = [];
+  for (let bi = 0; bi < totalBatches; bi++) {
+    allIssues.push(...(issuesByBatch.get(bi) ?? []));
+  }
+
+  if (!sections || sections.length === 0) {
+    const cov = failedBatchIndices.size > 0 ? "partial" as const : "complete" as const;
+    return [{
+      sectionLabel: "Full document",
+      coverageStatus: cov,
+      sourceChunkCount: totalChunkCount,
+      rawIssueCount: allIssues.length,
+      canonicalIssues: deduplicateAndCap(allIssues),
+    }];
+  }
+
+  // Build chunk→batch mapping
+  const chunkToBatchIdx = new Map<number, number>();
+  let chunkIdx = 0;
+  for (let bi = 0; bi < totalBatches; bi++) {
+    const batchChunkCount = Math.min(batchSize, totalChunkCount - bi * batchSize);
+    for (let c = 0; c < batchChunkCount; c++) {
+      chunkToBatchIdx.set(chunkIdx++, bi);
+    }
+  }
+
+  // Assign each batch to exactly ONE section (the first section that contains
+  // any of the batch's chunks). This prevents boundary batches from inflating
+  // canonical counts by appearing in multiple sections.
+  const batchToSection = new Map<number, number>();
+  for (let si = 0; si < sections.length; si++) {
+    for (const ci of sections[si].chunkIndices) {
+      const bi = chunkToBatchIdx.get(ci);
+      if (bi !== undefined && !batchToSection.has(bi)) {
+        batchToSection.set(bi, si);
+      }
+    }
+  }
+
+  const summaries: SectionSummary[] = [];
+  for (let si = 0; si < sections.length; si++) {
+    const section = sections[si];
+
+    // Collect batches assigned to this section
+    const sectionBatchIndices = new Set<number>();
+    for (const [bi, assignedSi] of batchToSection) {
+      if (assignedSi === si) sectionBatchIndices.add(bi);
+    }
+
+    const sectionIssues: ChunkIssue[] = [];
+    let hasFailed = false;
+    let hasSuccess = false;
+    for (const bi of sectionBatchIndices) {
+      if (failedBatchIndices.has(bi)) {
+        hasFailed = true;
+      } else {
+        hasSuccess = true;
+        sectionIssues.push(...(issuesByBatch.get(bi) ?? []));
+      }
+    }
+
+    // Also check if any chunk in this section belongs to a failed batch
+    // that was assigned elsewhere (for coverage status accuracy)
+    for (const ci of section.chunkIndices) {
+      const bi = chunkToBatchIdx.get(ci);
+      if (bi !== undefined && failedBatchIndices.has(bi)) {
+        hasFailed = true;
+      }
+    }
+
+    let cov: "complete" | "partial" | "failed";
+    if (!hasSuccess && sectionBatchIndices.size > 0) cov = "failed";
+    else if (hasFailed) cov = "partial";
+    else if (sectionBatchIndices.size === 0) cov = "failed";
+    else cov = "complete";
+
+    summaries.push({
+      sectionLabel: section.label,
+      coverageStatus: cov,
+      sourceChunkCount: section.chunkIndices.length,
+      rawIssueCount: sectionIssues.length,
+      canonicalIssues: deduplicateAndCap(sectionIssues),
+    });
+  }
+
+  return summaries;
+}
+
+function deduplicateAndCap(issues: ChunkIssue[]): SectionSummary["canonicalIssues"] {
+  const seen = new Map<string, SectionSummary["canonicalIssues"][0]>();
+
+  for (const issue of issues) {
+    const titlePart = normalizeTitle(issue.clauseLabel || issue.shortWhy);
+    if (!titlePart) continue;
+
+    const mechanism = issue.mechanismType || "other";
+    const key = `${titlePart}::${mechanism}`;
+
+    const candidate: SectionSummary["canonicalIssues"][0] = {
+      title: issue.clauseLabel,
+      severity: (issue.severity as SectionSummary["canonicalIssues"][0]["severity"]) || "medium",
+      shortWhy: issue.shortWhy,
+      clauseLabel: issue.clauseLabel,
+      excerpt: issue.excerpt,
+      tags: issue.tags ?? [],
+      impactType: issue.impactType ?? "other",
+      actionTiming: issue.actionTiming ?? "before-signing",
+      decisionRelevance: issue.decisionRelevance ?? "important",
+      mechanismType: mechanism,
+    };
+
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, candidate);
+    } else {
+      if ((SEVERITY_RANK[candidate.severity] ?? 0) > (SEVERITY_RANK[existing.severity] ?? 0)) {
+        seen.set(key, candidate);
+      }
+    }
+  }
+
+  const sorted = [...seen.values()].sort((a, b) => {
+    const relDiff = (RELEVANCE_RANK[b.decisionRelevance] ?? 0) - (RELEVANCE_RANK[a.decisionRelevance] ?? 0);
+    if (relDiff !== 0) return relDiff;
+    return (SEVERITY_RANK[b.severity] ?? 0) - (SEVERITY_RANK[a.severity] ?? 0);
+  });
+
+  return sorted;
+}
+
+const EXTRACTION_SYSTEM_PROMPT = `You are a contract clause extraction assistant. Identify consumer-relevant issues in the provided contract text.
+
+WHAT TO LOOK FOR — priority order:
+1. Money risk — charges, fees, price increases, penalties, hidden costs, deductible surprises
+2. Service/access loss — coverage denial, benefit exclusions, suspension triggers
+3. Rights restrictions — liability caps, forced arbitration, class-action waivers, shortened limitation periods
+4. Deadline/notice traps — cancellation windows, auto-renewal, notice-period requirements
+5. Linked agreements — bundled contracts, cross-penalty triggers
+6. Usage restrictions — fair use caps, throttling, data limits
+7. Data/privacy — data sharing, credit reporting, consent-by-use
+8. Operational traps — auto price increases, billing changes, "continued use = acceptance"
+
+For each issue output a compact JSON object:
+- clauseLabel: short clause name (max 8 words)
+- excerpt: relevant quote from the text (max 150 chars, must be from the actual text)
+- shortWhy: one sentence — why this matters to a consumer
+- severity: info|low|medium|high|critical
+- tags: array from [TimeTrap,EscapeHatch,PenaltyDisguise,SoleDiscretion,SilentWaiver,BurdenShift,SurpriseBilling,DataGrab,AutoRenew,LiabilityWaiver,ForcedArbitration,DamagesCap,ShortenedLimitations,UncappedFees,UnilateralChange]
+- impactType: cost|service-loss|cancellation|renewal|coverage|billing|usage-restriction|privacy|weak-remedy|linked-agreement|admin-trap|other
+- actionTiming: before-signing|before-renewal|before-cancellation|before-claim|if-problem-occurs|ongoing|info-only
+- decisionRelevance: decision-critical|important|monitor|background
+- mechanismType: arbitration|class_action_waiver|subrogation_reimbursement|coordination_of_benefits|prior_authorization|medical_necessity_discretion|network_limitation|step_therapy|appeal_deadline|termination_rescission|premium_rate_change|other — the specific legal or contractual mechanism. Use "other" only when no specific type fits.
+
+Output ONLY: {"issues":[...]}
+No markdown. No commentary. No text outside the JSON.
+Skip standard boilerplate. Focus on genuinely problematic or surprising clauses.
+If no issues in this text, return {"issues":[]}.`;
+
+interface ExtractionResult {
+  issues: ChunkIssue[];
+  truncated: boolean;
+}
+
+async function extractChunkBatchOnce(
+  chunks: string[],
+  contextHeader: string,
+  backend: "openai" | "anthropic",
+  maxTokens: number,
+  options?: AnalysisOptions,
+): Promise<ExtractionResult> {
+  const effectiveTemp = options?.temperature ?? TEMPERATURE;
+  const model =
+    options?.model ??
+    (backend === "anthropic"
+      ? (process.env.PLAINTERMS_ANTHROPIC_MODEL ?? "claude-opus-4-6")
+      : getOpenAIModel());
+
+  const userContent =
+    contextHeader +
+    "\n\n--- CONTRACT TEXT ---\n\n" +
+    chunks.join("\n---\n");
+
+  let responseText: string;
+  let stopReason: string | undefined;
+
+  if (backend === "anthropic") {
+    const result = await anthropicGenerateText({
+      system: EXTRACTION_SYSTEM_PROMPT,
+      user: userContent,
+      maxTokens,
+      temperature: effectiveTemp,
+      model,
+    });
+    responseText = result.text;
+    stopReason = result.stopReason;
+  } else {
+    responseText = await callOpenAI(
+      [
+        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+        { role: "user", content: userContent },
+      ],
+      {
+        model: options?.model,
+        maxTokens,
+        temperature: effectiveTemp,
+        reasoningEffort: options?.openaiReasoningEffort,
+      },
+    );
+  }
+
+  const extracted = extractJson(responseText);
+  const truncated = stopReason === "max_tokens" || isLikelyIncompleteJson(extracted);
+
+  if (truncated) {
+    const err = new Error(
+      `Extraction truncated (stopReason=${stopReason ?? "incomplete_json"}, maxTokens=${maxTokens})`,
+    );
+    (err as Record<string, unknown>).truncated = true;
+    throw err;
+  }
+
+  const json = JSON.parse(extracted);
+  return { issues: Array.isArray(json.issues) ? json.issues : [], truncated: false };
+}
+
+export function classifyExtractionError(err: unknown): "truncation" | "transport" | "parse" | "unknown" {
+  if (err instanceof Error) {
+    if ((err as Record<string, unknown>).truncated === true) return "truncation";
+    if (isTransientTransportError(err)) return "transport";
+    if (err instanceof SyntaxError || err.message.includes("JSON")) return "parse";
+  }
+  return "unknown";
+}
+
+async function extractChunkBatchWithRetry(
+  chunks: string[],
+  contextHeader: string,
+  backend: "openai" | "anthropic",
+  batchIndex: number,
+  options?: AnalysisOptions,
+): Promise<{ issues: ChunkIssue[]; failed: boolean }> {
+  const maxAttempts = 1 + EXTRACTION_MAX_RETRIES;
+  let lastTruncated = false;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const budget = (attempt > 1 && lastTruncated)
+      ? EXTRACTION_RETRY_OUTPUT_TOKENS
+      : EXTRACTION_MAX_OUTPUT_TOKENS;
+
+    console.log("[llm] stage1 batch attempt", {
+      batchIndex,
+      attempt,
+      maxOutputTokens: budget,
+      ...(attempt > 1 && lastTruncated ? { reason: "truncation_retry_with_higher_budget" } : {}),
+    });
+
+    try {
+      const result = await extractChunkBatchOnce(chunks, contextHeader, backend, budget, options);
+      console.log("[llm] stage1 batch result", {
+        batchIndex,
+        attempt,
+        result: "ok",
+        issueCount: result.issues.length,
+        budget,
+      });
+      return { issues: result.issues, failed: false };
+    } catch (err) {
+      const errorClass = classifyExtractionError(err);
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.log("[llm] stage1 batch result", {
+        batchIndex,
+        attempt,
+        result: "error",
+        errorClass,
+        error: msg,
+        budget,
+      });
+
+      if (errorClass === "truncation") {
+        lastTruncated = true;
+      }
+
+      if (attempt < maxAttempts) {
+        const delay = EXTRACTION_BACKOFF_MS[attempt - 1] ?? 3000;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  return { issues: [], failed: true };
+}
+
+async function runLargeDocAnalysis(
+  input: AnalysisInput,
+  options?: AnalysisOptions,
+): Promise<Report> {
+  const backend = options?.backend ?? getBackend();
+  const resolvedModel =
+    options?.model ??
+    (backend === "anthropic"
+      ? (process.env.PLAINTERMS_ANTHROPIC_MODEL ?? "claude-opus-4-6")
+      : getOpenAIModel());
+  const effectiveTemp = options?.temperature ?? TEMPERATURE;
+
+  // --- Section-based chunk filtering ---
+  const sections = input.sections;
+  const selectedIdx = input.selectedSectionIndices;
+  const allSectionsSelected =
+    !sections ||
+    !selectedIdx ||
+    selectedIdx.length === 0 ||
+    selectedIdx.length === sections.length;
+
+  let chunksToAnalyze: string[];
+  let coverageStatus: import("@/types/report").CoverageStatus;
+
+  if (sections && !allSectionsSelected) {
+    const allowedChunkSet = new Set<number>();
+    for (const si of selectedIdx!) {
+      if (si >= 0 && si < sections.length) {
+        for (const ci of sections[si].chunkIndices) allowedChunkSet.add(ci);
+      }
+    }
+    chunksToAnalyze = input.chunks.filter((_, i) => allowedChunkSet.has(i));
+
+    const analyzedLabels = selectedIdx!
+      .filter((si) => si >= 0 && si < sections.length)
+      .map((si) => sections[si].label);
+    const skippedLabels = sections
+      .filter((_, i) => !selectedIdx!.includes(i))
+      .map((s) => s.label);
+
+    coverageStatus = {
+      mode: "selected-sections",
+      analyzedSections: analyzedLabels,
+      skippedSections: skippedLabels,
+    };
+  } else {
+    chunksToAnalyze = input.chunks;
+    coverageStatus = {
+      mode: "full",
+      analyzedSections: sections ? sections.map((s) => s.label) : [],
+      skippedSections: [],
+    };
+  }
+
+  const totalChars = chunksToAnalyze.reduce((s, c) => s + c.length, 0);
+
+  console.log("[llm] large-doc-mode started", {
+    backend,
+    model: resolvedModel,
+    totalChunks: chunksToAnalyze.length,
+    totalChars,
+    coverageMode: coverageStatus.mode,
+    analyzedSections: coverageStatus.analyzedSections.length,
+    skippedSections: coverageStatus.skippedSections.length,
+  });
+
+  // --- Stage 1: chunk-level extraction ---
+
+  const contextParts: string[] = [];
+  if (input.audienceContext)
+    contextParts.push(`Audience: ${input.audienceContext}`);
+  if (input.jurisdictionContext)
+    contextParts.push(`Jurisdiction: ${input.jurisdictionContext}`);
+  if (input.contractTypeHint)
+    contextParts.push(`Contract type: ${input.contractTypeHint}`);
+
+  let contextHeader = "";
+  if (contextParts.length > 0) {
+    contextHeader = `Context: ${contextParts.join(" | ")}`;
+  }
+  if (input.personalContext) {
+    contextHeader += `\nPersonal context (use for prioritisation only): ${input.personalContext}`;
+  }
+
+  const batches: string[][] = [];
+  for (let i = 0; i < chunksToAnalyze.length; i += EXTRACTION_BATCH_SIZE) {
+    batches.push(chunksToAnalyze.slice(i, i + EXTRACTION_BATCH_SIZE));
+  }
+
+  console.log("[llm] large-doc-mode stage-1 started", {
+    batchCount: batches.length,
+    batchSize: EXTRACTION_BATCH_SIZE,
+    maxRetries: EXTRACTION_MAX_RETRIES,
+  });
+
+  const issuesByBatch = new Map<number, ChunkIssue[]>();
+  let failedBatchCount = 0;
+  const failedBatchIndices = new Set<number>();
+
+  for (let i = 0; i < batches.length; i += EXTRACTION_MAX_CONCURRENT) {
+    const concurrentSlice = batches.slice(i, i + EXTRACTION_MAX_CONCURRENT);
+    const results = await Promise.allSettled(
+      concurrentSlice.map((batch, j) =>
+        extractChunkBatchWithRetry(batch, contextHeader, backend, i + j, options),
+      ),
+    );
+    for (let j = 0; j < results.length; j++) {
+      const batchIdx = i + j;
+      const r = results[j];
+      if (r.status === "fulfilled") {
+        issuesByBatch.set(batchIdx, r.value.issues);
+        if (r.value.failed) {
+          failedBatchCount++;
+          failedBatchIndices.add(batchIdx);
+        }
+      } else {
+        failedBatchCount++;
+        failedBatchIndices.add(batchIdx);
+        issuesByBatch.set(batchIdx, []);
+      }
+    }
+  }
+
+  const allIssues: ChunkIssue[] = [];
+  for (let bi = 0; bi < batches.length; bi++) {
+    allIssues.push(...(issuesByBatch.get(bi) ?? []));
+  }
+
+  console.log("[llm] large-doc-mode stage-1 completed", {
+    batchCount: batches.length,
+    failedBatchCount,
+    totalCandidates: allIssues.length,
+  });
+
+  if (allIssues.length === 0) {
+    throw new Error(
+      "Large document analysis found no extractable issues. " +
+        "The document may not contain identifiable consumer contract terms.",
+    );
+  }
+
+  // --- Canonical merge: group and deduplicate by section ---
+
+  const sectionSummaries = buildSectionSummaries(
+    issuesByBatch,
+    sections,
+    EXTRACTION_BATCH_SIZE,
+    batches.length,
+    failedBatchIndices,
+    chunksToAnalyze.length,
+  );
+
+  const perSectionCanonicalSum = sectionSummaries.reduce(
+    (s, sec) => s + sec.canonicalIssues.length, 0,
+  );
+
+  // Compute globally unique count: deduplicate across all sections to get
+  // a true unique count (no inflation from boundary batches).
+  const globalDeduped = deduplicateAndCap(allIssues);
+  const totalCanonicalIssues = globalDeduped.length;
+
+  console.log("[llm] large-doc-mode canonical merge", {
+    rawCandidates: allIssues.length,
+    sectionCount: sectionSummaries.length,
+    totalCanonicalIssuesUnique: totalCanonicalIssues,
+    perSectionSum: perSectionCanonicalSum,
+    inflationCorrected: perSectionCanonicalSum !== totalCanonicalIssues,
+    sectionCoverage: sectionSummaries.map((s) => ({
+      label: s.sectionLabel,
+      status: s.coverageStatus,
+      issues: s.canonicalIssues.length,
+    })),
+  });
+
+  // ==========================================================================
+  // Stage 2: HIERARCHICAL SECTION-BASED SYNTHESIS
+  // Instead of one giant monolithic synthesis call for all canonical issues,
+  // we synthesize per-section, then combine in code, then do one small
+  // verdict/actions pass.
+  // ==========================================================================
+
+  const familyPolicy = resolveContractPolicy(
+    undefined,
+    input.contractTypeHint,
+  );
+
+  // --- Shared LLM call helper with transport retry + streaming for long requests ---
+
+  async function callSynthesis(
+    system: string,
+    user: string,
+    maxTokens: number,
+    label?: string,
+  ): Promise<{ text: string; stopReason?: string }> {
+    const isLongRequest = maxTokens >= GROUP_SYNTH_STREAM_THRESHOLD;
+    const tag = label ?? "synthesis";
+
+    console.log("[llm] stage2 callSynthesis", {
+      tag,
+      backend,
+      maxTokens,
+      isLongRequest,
+      stream: isLongRequest && backend === "anthropic",
+    });
+
+    const attempt = async (): Promise<{ text: string; stopReason?: string }> => {
+      if (backend === "anthropic") {
+        const result = await anthropicGenerateText({
+          system,
+          user,
+          maxTokens,
+          temperature: effectiveTemp,
+          model: resolvedModel,
+          stream: isLongRequest,
+          timeoutMs: isLongRequest ? 300_000 : 120_000,
+        });
+        return { text: result.text, stopReason: result.stopReason };
+      }
+      const text = await callOpenAI(
+        [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        {
+          model: options?.model,
+          maxTokens,
+          temperature: effectiveTemp,
+          reasoningEffort: options?.openaiReasoningEffort,
+          verbosity: options?.openaiVerbosity,
+          structured: options?.openaiStructured,
+        },
+      );
+      return { text, stopReason: undefined };
+    };
+
+    try {
+      return await attempt();
+    } catch (err) {
+      if (isTransientTransportError(err)) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        console.log("[llm] stage2 transient transport failure, retrying once", {
+          tag,
+          error: msg,
+          isLongRequest,
+        });
+        await new Promise((r) => setTimeout(r, 2000));
+        return await attempt();
+      }
+      throw err;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Stage 2a: per-section synthesis
+  // -----------------------------------------------------------------------
+
+  console.log("[llm] large-doc stage-2a started (per-section synthesis)", {
+    sectionCount: sectionSummaries.length,
+    totalCanonicalIssues,
+  });
+
+  const sectionSynthSystem = buildGroupSynthesisSystemPrompt(
+    input.locale,
+    familyPolicy.instruction,
+  );
+
+  const sectionSynthResults = await runPerSectionSynthesis(
+    sectionSummaries,
+    sectionSynthSystem,
+    {
+      title: input.title,
+      sourceType: input.sourceType,
+      locale: input.locale,
+      contextParts,
+      personalContext: input.personalContext,
+    },
+    callSynthesis,
+  );
+
+  const mergedFindings: Finding[] = [];
+  const mergedClauseCards: import("@/types/report").ClauseCard[] = [];
+  let sectionSynthFailures = 0;
+
+  for (const sr of sectionSynthResults) {
+    if (sr.findings.length > 0) {
+      mergedFindings.push(...sr.findings);
+      mergedClauseCards.push(...sr.clauseCards);
+    } else {
+      sectionSynthFailures++;
+    }
+  }
+
+  console.log("[llm] large-doc stage-2a completed", {
+    sectionsProcessed: sectionSynthResults.length,
+    sectionSynthFailures,
+    mergedFindings: mergedFindings.length,
+    mergedClauseCards: mergedClauseCards.length,
+    canonicalIn: totalCanonicalIssues,
+  });
+
+  if (mergedFindings.length === 0) {
+    throw new Error(
+      "Large document hierarchical synthesis produced no findings across all sections. " +
+      `Extracted ${allIssues.length} candidates (${totalCanonicalIssues} canonical) but per-section synthesis failed.`,
+    );
+  }
+
+  // Normalize finding/clause text
+  const n = normalizeLlmOutput;
+  for (const f of mergedFindings) {
+    f.title = n(f.title);
+    f.shortWhy = n(f.shortWhy);
+  }
+  for (const c of mergedClauseCards) {
+    c.atFirstGlance = n(c.atFirstGlance);
+    c.whatItMeans = n(c.whatItMeans);
+    c.scenario = n(c.scenario);
+    c.originalTextExcerpt = n(c.originalTextExcerpt);
+  }
+
+  // -----------------------------------------------------------------------
+  // Stage 2b: lightweight verdict + actions synthesis
+  // -----------------------------------------------------------------------
+
+  console.log("[llm] large-doc stage-2b started (verdict synthesis)", {
+    findingsCount: mergedFindings.length,
+  });
+
+  const verdictResult = await synthesizeVerdict(
+    mergedFindings,
+    {
+      title: input.title,
+      sourceType: input.sourceType,
+      locale: input.locale,
+      contractTypeHint: input.contractTypeHint,
+      contextParts,
+      personalContext: input.personalContext,
+      question: input.question,
+    },
+    sectionSynthSystem,
+    callSynthesis,
+  );
+
+  console.log("[llm] large-doc stage-2b completed", {
+    hasVerdict: !!verdictResult,
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage 2c: assemble final report in code
+  // -----------------------------------------------------------------------
+
+  const report: Report = {
+    id: "generated",
+    locale: (input.locale as Report["locale"]) ?? "GB",
+    contractFamily: verdictResult?.contractFamily ?? "contracts",
+    createdAtISO: new Date().toISOString(),
+    isPreview: false,
+    verdict: verdictResult?.verdict ?? {
+      headline: "Analysis complete — review findings below.",
+      summary: `This document was analysed across ${sectionSummaries.length} sections. ${mergedFindings.length} findings were identified.`,
+      severityOverall: computeOverallSeverity(mergedFindings),
+      scoreOverall: computeOverallScore(mergedFindings),
+    },
+    findings: mergedFindings,
+    paywalledFindingsCount: 0,
+    clauseCards: mergedClauseCards,
+    actions: {
+      recommendedQuestions: verdictResult?.recommendedQuestions ?? [],
+      letterTemplates: verdictResult?.letterTemplates ?? [],
+    },
+    userQuestion: verdictResult?.userQuestion ?? null,
+    userAnswer: verdictResult?.userAnswer ?? null,
+    coverageStatus,
+    topIssues: computeTopIssues(mergedFindings),
+    allIssuesBySection: buildAllIssuesBySection(mergedFindings),
+  };
+
+  // Normalize verdict text
+  report.verdict.headline = n(report.verdict.headline);
+  report.verdict.summary = n(report.verdict.summary);
+  if (report.userAnswer) report.userAnswer = n(report.userAnswer);
+  for (const t of report.actions.letterTemplates) {
+    t.body = n(t.body);
+  }
+
+  console.log("[llm] large-doc-mode completed", {
+    findings: report.findings.length,
+    topIssues: report.topIssues!.length,
+    allIssuesBySectionCount: report.allIssuesBySection!.length,
+    clauseCards: report.clauseCards.length,
+    letterTemplates: report.actions.letterTemplates.length,
+    recommendedQuestions: report.actions.recommendedQuestions.length,
+    candidatesIn: allIssues.length,
+    canonicalIn: totalCanonicalIssues,
+    sectionSynthFailures,
+    coverageMode: coverageStatus.mode,
+  });
+
+  return report;
+}
+
+// ===========================================================================
+// Stage 2 helpers: section-level synthesis + verdict synthesis
+// ===========================================================================
+
+/** @deprecated Use GROUP_SYNTH_MAX_OUTPUT_TOKENS. Kept for test import compatibility. */
+export const SECTION_SYNTH_MAX_OUTPUT_TOKENS = 6000;
+/** @deprecated Use GROUP_SYNTH_RETRY_OUTPUT_TOKENS. Kept for test import compatibility. */
+export const SECTION_SYNTH_RETRY_OUTPUT_TOKENS = 8000;
+
+export const ISSUES_PER_SYNTH_GROUP = 6;
+export const GROUP_SYNTH_MAX_OUTPUT_TOKENS = 4000;
+export const GROUP_SYNTH_RETRY_OUTPUT_TOKENS = 5500;
+const GROUP_SYNTH_MAX_CONCURRENT = 3;
+const SECTION_SYNTH_MAX_CONCURRENT = 2;
+const GROUP_SYNTH_STREAM_THRESHOLD = 5000;
+const VERDICT_SYNTH_MAX_OUTPUT_TOKENS = 4000;
+
+const GROUP_SYNTHESIS_SYSTEM_PROMPT = `You are PlainTerms, producing structured JSON findings and clause cards for a small group of contract issues.
+
+RULES:
+- Output ONLY valid JSON. No markdown, no commentary.
+- Every string value must be plain text (no markdown formatting).
+- Be SPECIFIC to the actual document text provided in the excerpts.
+
+OUTPUT SCHEMA — return a JSON object with exactly these fields:
+{
+  "findings": [
+    {
+      "id": "<unique id like f-1, f-2>",
+      "title": "<short finding title>",
+      "severity": "<info|low|medium|high|critical>",
+      "score": <0-100>,
+      "tags": ["<TaxonomyTag values>"],
+      "shortWhy": "<one sentence>",
+      "relatedClauseIds": ["<clause IDs from clauseCards>"],
+      "impactType": "<cost|service-loss|cancellation|renewal|coverage|billing|usage-restriction|privacy|weak-remedy|linked-agreement|admin-trap|other>",
+      "actionTiming": "<before-signing|before-renewal|before-cancellation|before-claim|if-problem-occurs|ongoing|info-only>",
+      "decisionRelevance": "<decision-critical|important|monitor|background>",
+      "mechanismType": "<arbitration|class_action_waiver|subrogation_reimbursement|coordination_of_benefits|prior_authorization|medical_necessity_discretion|network_limitation|step_therapy|appeal_deadline|termination_rescission|premium_rate_change|other>",
+      "sectionLabel": "<section label>"
+    }
+  ],
+  "clauseCards": [
+    {
+      "clauseId": "<unique id like c-1>",
+      "clauseLabel": "<short clause name>",
+      "originalTextExcerpt": "<brief quote from excerpts, max 2 sentences>",
+      "atFirstGlance": "<1 sentence>",
+      "whatItMeans": "<1-2 sentences>",
+      "scenario": "<1-2 sentences>",
+      "whatToDo": ["<2-3 actionable steps>"],
+      "goDeeper": "<1 sentence or empty string>"
+    }
+  ]
+}
+
+ISSUE PRESERVATION RULES — critical:
+- Produce EXACTLY ONE finding per canonical issue provided. No merging. No dropping. No inventing.
+- Preserve the mechanismType from each canonical issue.
+- Set sectionLabel on every finding.
+- Each finding must have exactly one corresponding clauseCard.
+- KEEP ALL PROSE ULTRA-COMPACT. Short sentences only.
+- Completing valid JSON is the TOP priority. Finish all arrays and objects.
+- Do NOT pad with filler text. Shorter is better.`;
+
+function buildGroupSynthesisSystemPrompt(
+  locale?: string,
+  familyInstruction?: string,
+): string {
+  return GROUP_SYNTHESIS_SYSTEM_PROMPT +
+    buildLocaleInstruction(locale) +
+    (familyInstruction ? "\n\n" + familyInstruction : "");
+}
+
+interface SectionSynthInput {
+  title?: string;
+  sourceType: string;
+  locale?: string;
+  contextParts: string[];
+  personalContext?: string;
+}
+
+interface SectionSynthOutput {
+  sectionLabel: string;
+  findings: Finding[];
+  clauseCards: import("@/types/report").ClauseCard[];
+  canonicalIssueCount: number;
+}
+
+interface VerdictSynthInput {
+  title?: string;
+  sourceType: string;
+  locale?: string;
+  contractTypeHint?: string;
+  contextParts: string[];
+  personalContext?: string;
+  question?: string;
+}
+
+interface VerdictResult {
+  verdict: Report["verdict"];
+  contractFamily: Report["contractFamily"];
+  recommendedQuestions: string[];
+  letterTemplates: import("@/types/report").LetterTemplate[];
+  userQuestion: string | null;
+  userAnswer: string | null;
+}
+
+export function chunkCanonicalIssuesForSynthesis<T>(
+  issues: T[],
+  maxPerGroup: number = ISSUES_PER_SYNTH_GROUP,
+): T[][] {
+  const groups: T[][] = [];
+  for (let i = 0; i < issues.length; i += maxPerGroup) {
+    groups.push(issues.slice(i, i + maxPerGroup));
+  }
+  return groups;
+}
+
+export function estimateGroupTokenBudget(issueCount: number): number {
+  const base = Math.max(issueCount * 600, 2000);
+  return Math.min(base, GROUP_SYNTH_MAX_OUTPUT_TOKENS);
+}
+
+/** @deprecated Use estimateGroupTokenBudget. Kept for test import compatibility. */
+export function estimateSectionTokenBudget(issueCount: number): number {
+  return estimateGroupTokenBudget(issueCount);
+}
+
+type CallSynthesisFn = (
+  system: string,
+  user: string,
+  maxTokens: number,
+  label?: string,
+) => Promise<{ text: string; stopReason?: string }>;
+
+interface GroupSynthResult {
+  findings: Finding[];
+  clauseCards: import("@/types/report").ClauseCard[];
+}
+
+function parseGroupSynthOutput(
+  raw: string,
+  sectionLabel: string,
+  groupIndex: number,
+): GroupSynthResult {
+  const parsed = JSON.parse(extractJson(raw));
+  const findings: Finding[] = [];
+  const clauseCards: import("@/types/report").ClauseCard[] = [];
+
+  if (Array.isArray(parsed.findings)) {
+    for (let i = 0; i < parsed.findings.length; i++) {
+      const f = parsed.findings[i];
+      findings.push({
+        id: f.id || `f-${sectionLabel}-g${groupIndex}-${i + 1}`,
+        title: f.title ?? "",
+        severity: f.severity ?? "medium",
+        score: f.score ?? 50,
+        tags: Array.isArray(f.tags) ? f.tags : [],
+        shortWhy: f.shortWhy ?? "",
+        relatedClauseIds: Array.isArray(f.relatedClauseIds) ? f.relatedClauseIds : [],
+        impactType: f.impactType ?? "other",
+        actionTiming: f.actionTiming ?? "before-signing",
+        decisionRelevance: f.decisionRelevance ?? "important",
+        mechanismType: f.mechanismType ?? undefined,
+        sectionLabel: f.sectionLabel ?? sectionLabel,
+      });
+    }
+  }
+
+  if (Array.isArray(parsed.clauseCards)) {
+    for (let i = 0; i < parsed.clauseCards.length; i++) {
+      const c = parsed.clauseCards[i];
+      clauseCards.push({
+        clauseId: c.clauseId || `c-${sectionLabel}-g${groupIndex}-${i + 1}`,
+        clauseLabel: c.clauseLabel ?? "",
+        originalTextExcerpt: c.originalTextExcerpt ?? "",
+        atFirstGlance: c.atFirstGlance ?? "",
+        whatItMeans: c.whatItMeans ?? "",
+        scenario: c.scenario ?? "",
+        whatToDo: Array.isArray(c.whatToDo) ? c.whatToDo : [],
+        goDeeper: c.goDeeper ?? undefined,
+        risks: Array.isArray(c.risks) ? c.risks : undefined,
+        negotiation: c.negotiation ?? undefined,
+      });
+    }
+  }
+
+  return { findings, clauseCards };
+}
+
+async function synthesizeIssueGroup(
+  sectionLabel: string,
+  groupIndex: number,
+  groupIssues: SectionSummary["canonicalIssues"],
+  systemPrompt: string,
+  meta: SectionSynthInput,
+  callSynthesis: CallSynthesisFn,
+): Promise<GroupSynthResult> {
+  const issueCount = groupIssues.length;
+  if (issueCount === 0) return { findings: [], clauseCards: [] };
+
+  let userMsg = "";
+  if (meta.title) userMsg += `Document title: ${meta.title}\n`;
+  userMsg += `Source type: ${meta.sourceType}\n`;
+  if (meta.locale) userMsg += `Locale: ${meta.locale}\n`;
+  if (meta.contextParts.length > 0) {
+    userMsg += `Context: ${meta.contextParts.join(" | ")}\n`;
+  }
+  if (meta.personalContext) {
+    userMsg += `Personal context: ${meta.personalContext}\n`;
+  }
+  userMsg += `\nSection: "${sectionLabel}" — issue group ${groupIndex + 1} (${issueCount} issues)\n`;
+  userMsg += `\n--- CANONICAL ISSUES ---\n\n`;
+  userMsg += JSON.stringify(groupIssues);
+
+  const budget = estimateGroupTokenBudget(issueCount);
+  const tag = `group-synth:${sectionLabel}:g${groupIndex}`;
+
+  console.log("[llm] stage2a group synthesis started", {
+    section: sectionLabel,
+    group: groupIndex,
+    issues: issueCount,
+    budget,
+  });
+
+  let synthText: string | undefined;
+  let stopReason: string | undefined;
+
+  try {
+    const result = await callSynthesis(systemPrompt, userMsg, budget, tag);
+    synthText = result.text;
+    stopReason = result.stopReason;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.log("[llm] stage2a group synthesis failed", {
+      section: sectionLabel, group: groupIndex, attempt: 1, error: msg,
+    });
+  }
+
+  if (synthText && (stopReason === "max_tokens" || isLikelyIncompleteJson(extractJson(synthText)))) {
+    const retryBudget = Math.min(issueCount * 800, GROUP_SYNTH_RETRY_OUTPUT_TOKENS);
+    console.log("[llm] stage2a group synthesis truncated, retrying", {
+      section: sectionLabel, group: groupIndex, retryBudget,
+    });
+    try {
+      const result = await callSynthesis(systemPrompt, userMsg, retryBudget, `${tag}:retry`);
+      synthText = result.text;
+      stopReason = result.stopReason;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.log("[llm] stage2a group synthesis retry failed", {
+        section: sectionLabel, group: groupIndex, error: msg,
+      });
+    }
+  }
+
+  if (!synthText) {
+    console.log("[llm] stage2a group synthesis no output", {
+      section: sectionLabel, group: groupIndex,
+    });
+    return { findings: [], clauseCards: [] };
+  }
+
+  try {
+    const result = parseGroupSynthOutput(synthText, sectionLabel, groupIndex);
+    console.log("[llm] stage2a group synthesis completed", {
+      section: sectionLabel,
+      group: groupIndex,
+      findings: result.findings.length,
+      clauseCards: result.clauseCards.length,
+      canonicalIn: issueCount,
+      dropCount: issueCount - result.findings.length,
+    });
+    return result;
+  } catch (parseErr) {
+    const msg = parseErr instanceof Error ? parseErr.message : "unknown";
+    console.log("[llm] stage2a group synthesis parse failed", {
+      section: sectionLabel, group: groupIndex,
+      error: msg, responseLen: synthText.length,
+    });
+    return { findings: [], clauseCards: [] };
+  }
+}
+
+async function synthesizeSingleSection(
+  section: SectionSummary,
+  systemPrompt: string,
+  meta: SectionSynthInput,
+  callSynthesis: CallSynthesisFn,
+): Promise<SectionSynthOutput> {
+  const issueCount = section.canonicalIssues.length;
+  if (issueCount === 0) {
+    return { sectionLabel: section.sectionLabel, findings: [], clauseCards: [], canonicalIssueCount: 0 };
+  }
+
+  const groups = chunkCanonicalIssuesForSynthesis(section.canonicalIssues);
+
+  console.log("[llm] stage2a section started (micro-batched)", {
+    section: section.sectionLabel,
+    canonicalIssues: issueCount,
+    groupCount: groups.length,
+    groupSize: ISSUES_PER_SYNTH_GROUP,
+  });
+
+  const allFindings: Finding[] = [];
+  const allClauseCards: import("@/types/report").ClauseCard[] = [];
+  let groupFailures = 0;
+
+  for (let gi = 0; gi < groups.length; gi += GROUP_SYNTH_MAX_CONCURRENT) {
+    const concurrentGroups = groups.slice(gi, gi + GROUP_SYNTH_MAX_CONCURRENT);
+    const results = await Promise.allSettled(
+      concurrentGroups.map((groupIssues, j) =>
+        synthesizeIssueGroup(
+          section.sectionLabel,
+          gi + j,
+          groupIssues,
+          systemPrompt,
+          meta,
+          callSynthesis,
+        ),
+      ),
+    );
+
+    for (let j = 0; j < results.length; j++) {
+      const r = results[j];
+      if (r.status === "fulfilled") {
+        allFindings.push(...r.value.findings);
+        allClauseCards.push(...r.value.clauseCards);
+        if (r.value.findings.length === 0 && concurrentGroups[j].length > 0) {
+          groupFailures++;
+        }
+      } else {
+        groupFailures++;
+        console.log("[llm] stage2a group rejected", {
+          section: section.sectionLabel,
+          group: gi + j,
+          error: r.reason instanceof Error ? r.reason.message : "unknown",
+        });
+      }
+    }
+  }
+
+  console.log("[llm] stage2a section completed", {
+    section: section.sectionLabel,
+    findings: allFindings.length,
+    clauseCards: allClauseCards.length,
+    canonicalIn: issueCount,
+    groupCount: groups.length,
+    groupFailures,
+    dropCount: issueCount - allFindings.length,
+  });
+
+  return {
+    sectionLabel: section.sectionLabel,
+    findings: allFindings,
+    clauseCards: allClauseCards,
+    canonicalIssueCount: issueCount,
+  };
+}
+
+export async function runPerSectionSynthesis(
+  sectionSummaries: SectionSummary[],
+  systemPrompt: string,
+  meta: SectionSynthInput,
+  callSynthesis: CallSynthesisFn,
+): Promise<SectionSynthOutput[]> {
+  const results: SectionSynthOutput[] = [];
+
+  for (let i = 0; i < sectionSummaries.length; i += SECTION_SYNTH_MAX_CONCURRENT) {
+    const batch = sectionSummaries.slice(i, i + SECTION_SYNTH_MAX_CONCURRENT);
+    const batchResults = await Promise.allSettled(
+      batch.map((section) =>
+        synthesizeSingleSection(section, systemPrompt, meta, callSynthesis),
+      ),
+    );
+    for (let j = 0; j < batchResults.length; j++) {
+      const r = batchResults[j];
+      if (r.status === "fulfilled") {
+        results.push(r.value);
+      } else {
+        const section = batch[j];
+        console.log("[llm] stage2a section synthesis rejected", {
+          section: section.sectionLabel,
+          error: r.reason instanceof Error ? r.reason.message : "unknown",
+        });
+        results.push({
+          sectionLabel: section.sectionLabel,
+          findings: [],
+          clauseCards: [],
+          canonicalIssueCount: section.canonicalIssues.length,
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+const VERDICT_SYNTHESIS_PROMPT = `You are PlainTerms. Given a set of already-synthesized findings from a contract analysis, produce ONLY a verdict summary and recommended actions.
+
+Do NOT regenerate findings or clause cards. They already exist.
+
+Output ONLY valid JSON with these fields:
+{
+  "contractFamily": "<insurance|leases|contracts|finance|employment|telecom|gym|cloud-services>",
+  "verdict": {
+    "headline": "<one-sentence overall assessment, specific to this document>",
+    "summary": "<2-4 sentence summary naming the specific concerns found>",
+    "severityOverall": "<info|low|medium|high|critical>",
+    "scoreOverall": <0-100 integer>
+  },
+  "recommendedQuestions": ["<2-5 practical questions the reader could ask>"],
+  "letterTemplates": [<0-2 templates if high/critical findings exist, otherwise empty array>],
+  "userQuestion": <string|null>,
+  "userAnswer": <string|null>
+}
+
+Letter template shape (if included): { "id": "<lt-1>", "title": "<title>", "body": "<brief body>" }
+
+SCORING:
+- 1-2 low findings → 85-95
+- several medium → 55-75
+- any high/critical → 25-55
+
+Keep prose concise. Complete valid JSON.`;
+
+async function synthesizeVerdict(
+  findings: Finding[],
+  meta: VerdictSynthInput,
+  _baseSystem: string,
+  callSynthesis: (system: string, user: string, maxTokens: number, label?: string) => Promise<{ text: string; stopReason?: string }>,
+): Promise<VerdictResult | null> {
+  const system = VERDICT_SYNTHESIS_PROMPT + buildLocaleInstruction(meta.locale);
+
+  let userMsg = "";
+  if (meta.title) userMsg += `Document title: ${meta.title}\n`;
+  userMsg += `Source type: ${meta.sourceType}\n`;
+  if (meta.locale) userMsg += `Locale: ${meta.locale}\n`;
+  if (meta.contractTypeHint) userMsg += `Contract type: ${meta.contractTypeHint}\n`;
+  if (meta.contextParts.length > 0) {
+    userMsg += `Context: ${meta.contextParts.join(" | ")}\n`;
+  }
+  if (meta.personalContext) {
+    userMsg += `Personal context: ${meta.personalContext}\n`;
+  }
+  if (meta.question) {
+    userMsg += `USER QUESTION: ${meta.question}\n`;
+    userMsg += `(Populate "userQuestion" verbatim and "userAnswer" with 3-6 sentence answer.)\n`;
+  }
+  userMsg += `\n${findings.length} findings were identified:\n\n`;
+
+  const findingSummary = findings.map((f) => ({
+    title: f.title,
+    severity: f.severity,
+    shortWhy: f.shortWhy,
+    mechanismType: f.mechanismType,
+    sectionLabel: f.sectionLabel,
+    impactType: f.impactType,
+    decisionRelevance: f.decisionRelevance,
+  }));
+  userMsg += JSON.stringify(findingSummary);
+
+  try {
+    const result = await callSynthesis(
+      system,
+      userMsg,
+      VERDICT_SYNTH_MAX_OUTPUT_TOKENS,
+      "verdict-synthesis",
+    );
+
+    const parsed = JSON.parse(extractJson(result.text));
+
+    return {
+      verdict: {
+        headline: parsed.verdict?.headline ?? "Analysis complete.",
+        summary: parsed.verdict?.summary ?? "",
+        severityOverall: parsed.verdict?.severityOverall ?? computeOverallSeverity(findings),
+        scoreOverall: parsed.verdict?.scoreOverall ?? computeOverallScore(findings),
+      },
+      contractFamily: normalizeContractFamily(parsed.contractFamily) as Report["contractFamily"],
+      recommendedQuestions: Array.isArray(parsed.recommendedQuestions) ? parsed.recommendedQuestions : [],
+      letterTemplates: Array.isArray(parsed.letterTemplates)
+        ? parsed.letterTemplates.map((t: Record<string, unknown>, i: number) => ({
+            id: (t.id as string) ?? `lt-${i + 1}`,
+            title: (t.title as string) ?? (t.name as string) ?? `Letter ${i + 1}`,
+            body: (t.body as string) ?? (t.content as string) ?? "",
+          }))
+        : [],
+      userQuestion: (parsed.userQuestion as string) ?? null,
+      userAnswer: (parsed.userAnswer as string) ?? null,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.log("[llm] verdict synthesis failed, using computed fallback", { error: msg });
+    return null;
+  }
+}
+
+function computeOverallSeverity(findings: Finding[]): Report["verdict"]["severityOverall"] {
+  const sevOrder = ["critical", "high", "medium", "low", "info"] as const;
+  for (const s of sevOrder) {
+    if (findings.some((f) => f.severity === s)) return s;
+  }
+  return "info";
+}
+
+function computeOverallScore(findings: Finding[]): number {
+  const hasCritical = findings.some((f) => f.severity === "critical");
+  const hasHigh = findings.some((f) => f.severity === "high");
+  const medCount = findings.filter((f) => f.severity === "medium").length;
+
+  if (hasCritical) return 25;
+  if (hasHigh) return 40;
+  if (medCount >= 5) return 55;
+  if (medCount >= 2) return 65;
+  if (findings.length <= 2) return 90;
+  return 75;
 }
