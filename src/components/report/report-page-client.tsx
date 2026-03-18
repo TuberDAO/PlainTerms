@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { VerdictHeader } from "@/components/report/verdict-header";
 import { FindingsList } from "@/components/report/findings-list";
 import { PaywallBlock } from "@/components/report/paywall-block";
@@ -13,7 +13,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Download, Share2, AlertTriangle } from "lucide-react";
+import { Download, Share2, AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
 import { UserQuestionAnswer } from "@/components/report/user-question-answer";
 import { PrioritySummary } from "@/components/report/priority-summary";
 import { CoverageStatusBlock } from "@/components/report/coverage-status";
@@ -36,6 +36,9 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
       track("report_viewed", { isPreview: report.isPreview });
     }
   }, [report]);
+
+  const [clausesExpanded, setClausesExpanded] = useState(false);
+  const [sectionsExpanded, setSectionsExpanded] = useState(false);
 
   if (!report) {
     return (
@@ -71,6 +74,11 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
     ? report.clauseCards.slice(0, PREVIEW_CLAUSE_CARDS_LIMIT)
     : report.clauseCards;
 
+  const hasActions = !report.isPreview && (
+    report.actions.recommendedQuestions.length > 0 ||
+    report.actions.letterTemplates.length > 0
+  );
+
   return (
     <div className="py-10 md:py-16">
       <div className="mx-auto max-w-4xl px-6">
@@ -84,23 +92,38 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
           </p>
         </div>
 
+        {/* ═══════════════════════════════════════════════════════════
+            LAYER 1 — Buyer-first summary
+            ═══════════════════════════════════════════════════════════ */}
+
         <VerdictHeader verdict={report.verdict} />
 
-        {/* Coverage status — shows what was analysed */}
         {report.coverageStatus && (
           <CoverageStatusBlock coverageStatus={report.coverageStatus} />
         )}
 
-        {/* Priority summary — most important issues right now */}
         <PrioritySummary findings={report.findings} />
 
-        {/* User Q&A */}
         {report.userQuestion && report.userAnswer && (
           <div className="mt-6">
             <UserQuestionAnswer
               userQuestion={report.userQuestion}
               userAnswer={report.userAnswer}
             />
+          </div>
+        )}
+
+        {/* Key findings */}
+        <div className="mt-10">
+          <FindingsList
+            findings={visibleFindings}
+            heading={hasTopIssues ? "Key findings" : "Findings"}
+          />
+        </div>
+
+        {report.isPreview && report.paywalledFindingsCount > 0 && (
+          <div className="mt-6">
+            <PaywallBlock count={report.paywalledFindingsCount} />
           </div>
         )}
 
@@ -138,56 +161,123 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
           </TooltipProvider>
         </div>
 
-        {/* Findings — topIssues when available, full list otherwise */}
-        <div className="mt-10">
-          <FindingsList
-            findings={visibleFindings}
-            heading={hasTopIssues ? "Key findings" : "Findings"}
-          />
-        </div>
+        {/* ═══════════════════════════════════════════════════════════
+            LAYER 2 — Action pack (before detailed reference)
+            ═══════════════════════════════════════════════════════════ */}
 
-        {/* Paywall block */}
-        {report.isPreview && report.paywalledFindingsCount > 0 && (
-          <div className="mt-6">
-            <PaywallBlock count={report.paywalledFindingsCount} />
+        {hasActions && (
+          <div className="mt-12 space-y-8" data-testid="action-pack">
+            <h2 className="text-lg font-semibold sm:text-xl">
+              What to do next
+            </h2>
+
+            {report.actions.recommendedQuestions.length > 0 && (
+              <Card className="rounded-xl">
+                <CardContent className="p-6">
+                  <h3 className="text-base font-semibold">Questions to ask</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    You can ask these directly — by phone, email, or in person.
+                  </p>
+                  <ul className="mt-4 space-y-2.5">
+                    {report.actions.recommendedQuestions.map((q, i) => (
+                      <li
+                        key={i}
+                        className="flex items-start gap-2.5 text-sm leading-relaxed text-muted-foreground"
+                      >
+                        <span className="mt-2 block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
+                        {q}
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
+
+            {report.actions.letterTemplates.length > 0 && (
+              <>
+                <div>
+                  <h3 className="text-base font-semibold">Ready-to-send letters</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Use these to put your concerns in writing.
+                    {report.actions.letterTemplates.length > 1 && (
+                      <> You can send a targeted letter about one issue, or use the combined letter to cover everything at once.</>
+                    )}
+                  </p>
+                </div>
+                {report.actions.letterTemplates.map((letter) => (
+                  <Card key={letter.id} className="rounded-xl">
+                    <CardContent className="p-6">
+                      <h4 className="text-sm font-semibold sm:text-base">
+                        {letter.title}
+                      </h4>
+                      <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-muted/30 p-5 text-xs leading-relaxed text-muted-foreground sm:text-sm">
+                        {letter.body}
+                      </pre>
+                    </CardContent>
+                  </Card>
+                ))}
+              </>
+            )}
           </div>
         )}
 
-        {/* All findings by section — full coverage for non-preview large-doc reports */}
-        {showSectionView && (
-          <div className="mt-12">
+        {/* ═══════════════════════════════════════════════════════════
+            LAYER 3 — Detailed reference (clause cards + full sections)
+            ═══════════════════════════════════════════════════════════ */}
+
+        {!report.isPreview && (
+          <div className="mt-16 border-t pt-10" data-testid="detailed-reference">
             <h2 className="text-lg font-semibold sm:text-xl">
-              All findings by section
+              Detailed clause reference
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Complete issue coverage across {report.allIssuesBySection!.length}{" "}
-              section{report.allIssuesBySection!.length !== 1 ? "s" : ""} ({totalSectionIssues}{" "}
-              total)
+              Full clause-by-clause breakdown. Use this to understand exactly what each clause says and means.
             </p>
-            {report.allIssuesBySection!.map((section) => (
-              <div key={section.sectionLabel} className="mt-6">
-                <h3 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                  {section.sectionLabel}
-                </h3>
-                <FindingsList findings={section.issues} />
+
+            {/* Clause cards — collapsed by default for large reports */}
+            {visibleClauses.length > 0 && (
+              <div className="mt-8">
+                {visibleClauses.length > 4 && !clausesExpanded ? (
+                  <>
+                    <div className="space-y-6">
+                      {visibleClauses.slice(0, 3).map((clause) => (
+                        <ClauseCardFull key={clause.clauseId} clause={clause} startCollapsed />
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => setClausesExpanded(true)}
+                      className="mt-4 flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/5"
+                    >
+                      <ChevronDown className="h-4 w-4" />
+                      Show all {visibleClauses.length} clause breakdowns
+                    </button>
+                  </>
+                ) : (
+                  <div className="space-y-6">
+                    {visibleClauses.map((clause) => (
+                      <ClauseCardFull key={clause.clauseId} clause={clause} startCollapsed />
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
+            )}
           </div>
         )}
 
-        {/* Clause cards */}
-        <div className="mt-12">
-          <h2 className="text-lg font-semibold sm:text-xl">
-            Clause breakdown
-          </h2>
-          <div className="mt-6 space-y-6">
-            {visibleClauses.map((clause) => (
-              <ClauseCardFull key={clause.clauseId} clause={clause} />
-            ))}
+        {/* Preview clause cards — shown expanded */}
+        {report.isPreview && (
+          <div className="mt-12">
+            <h2 className="text-lg font-semibold sm:text-xl">
+              Clause breakdown
+            </h2>
+            <div className="mt-6 space-y-6">
+              {visibleClauses.map((clause) => (
+                <ClauseCardFull key={clause.clauseId} clause={clause} />
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Paywalled clause cards */}
         {report.isPreview &&
           report.clauseCards.length > PREVIEW_CLAUSE_CARDS_LIMIT && (
             <div className="mt-6">
@@ -199,39 +289,32 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
             </div>
           )}
 
-        {/* Actions section */}
-        {!report.isPreview && (
-          <div className="mt-12 space-y-8">
-            {/* Recommended questions */}
-            <Card className="rounded-xl">
-              <CardContent className="p-6">
-                <h2 className="text-lg font-semibold">Questions to ask</h2>
-                <ul className="mt-4 space-y-2.5">
-                  {report.actions.recommendedQuestions.map((q, i) => (
-                    <li
-                      key={i}
-                      className="flex items-start gap-2.5 text-sm leading-relaxed text-muted-foreground"
-                    >
-                      <span className="mt-2 block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
-                      {q}
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-
-            {/* Letter templates */}
-            {report.actions.letterTemplates.map((letter) => (
-              <Card key={letter.id} className="rounded-xl">
-                <CardContent className="p-6">
-                  <h3 className="text-sm font-semibold sm:text-base">
-                    {letter.title}
-                  </h3>
-                  <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-muted/30 p-5 text-xs leading-relaxed text-muted-foreground sm:text-sm">
-                    {letter.body}
-                  </pre>
-                </CardContent>
-              </Card>
+        {/* All findings by section — collapsible reference */}
+        {showSectionView && (
+          <div className="mt-12">
+            <button
+              onClick={() => setSectionsExpanded(!sectionsExpanded)}
+              className="flex items-center gap-2 text-lg font-semibold sm:text-xl"
+            >
+              {sectionsExpanded ? (
+                <ChevronDown className="h-5 w-5 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-5 w-5 text-muted-foreground" />
+              )}
+              All findings by section
+            </button>
+            <p className="mt-1 ml-7 text-sm text-muted-foreground">
+              Complete issue coverage across {report.allIssuesBySection!.length}{" "}
+              section{report.allIssuesBySection!.length !== 1 ? "s" : ""} ({totalSectionIssues}{" "}
+              total)
+            </p>
+            {sectionsExpanded && report.allIssuesBySection!.map((section) => (
+              <div key={section.sectionLabel} className="mt-6">
+                <h3 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                  {section.sectionLabel}
+                </h3>
+                <FindingsList findings={section.issues} />
+              </div>
             ))}
           </div>
         )}

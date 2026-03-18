@@ -2064,23 +2064,59 @@ const SECTION_SYNTH_MAX_CONCURRENT = 2;
 const GROUP_SYNTH_STREAM_THRESHOLD = 5000;
 const VERDICT_SYNTH_MAX_OUTPUT_TOKENS = 4000;
 
-const GROUP_SYNTHESIS_SYSTEM_PROMPT = `You are PlainTerms, producing structured JSON findings and clause cards for a small group of contract issues.
+/** @internal Exported for test assertions on prompt content. */
+export const GROUP_SYNTHESIS_SYSTEM_PROMPT = `You are PlainTerms, producing structured JSON findings and clause cards for a small group of contract issues. Your audience is an ordinary person — not a lawyer, not a policy analyst.
 
-RULES:
+FORMAT RULES:
 - Output ONLY valid JSON. No markdown, no commentary.
 - Every string value must be plain text (no markdown formatting).
 - Be SPECIFIC to the actual document text provided in the excerpts.
+- Completing valid JSON is the TOP priority. Finish all arrays and objects.
+- Keep every field compact. Short sentences only. Shorter is better.
+
+PLAIN-LANGUAGE RULES — critical for every prose field:
+- Write at a reading level a 12-year-old could follow.
+- Use short sentences with common everyday words.
+- One main idea per sentence.
+- Avoid passive voice. Avoid "if a court were to interpret..." phrasing.
+- Do not sound like a lawyer, a policy analyst, or a college essay.
+- Sound like a calm support worker explaining something stressful to a normal person.
+- If a technical or legal term is unavoidable, define it immediately in plain English.
+- Good: "This means you may have to pay the full bill yourself."
+- Good: "Even after you meet the deductible, you still pay half."
+- Bad: "The policyholder may be subject to cost-sharing obligations pursuant to the applicable benefit schedule."
+
+CLAUSE CARD PROSE RULES:
+- atFirstGlance: Write what a normal buyer would casually assume this clause means. Friendly, slightly reassuring tone. One sentence.
+- whatItMeans: Explain the catch — the real practical impact. Be direct and specific. Focus on consequences the reader would not expect. One to two sentences.
+- scenario: A specific, concrete "how you get burned" story. Use real-sounding amounts, timeframes, and situations. One to two sentences.
+- whatToDo: Time-aware actionable steps. Each step says WHEN to act (before signing, before renewal, if something goes wrong, ongoing). Two to three items.
+- goDeeper: One sentence of additional context, or empty string.
+
+LEGALLY QUALIFIED CLAUSES:
+- If the policy text says something harsh but outside law may limit that outcome, distinguish clearly:
+  1. What the policy text says.
+  2. What the insurer or provider may try to rely on.
+  3. Where outside law may limit or qualify it, and what the buyer should do to clarify.
+- Do NOT overstate the harshest reading as guaranteed fact when legally uncertain.
+- Do NOT soften or hide harsh wording either.
+- Make uncertainty actionable: suggest the buyer ask for written clarification or get advice.
+
+PERSONAL CONTEXT:
+- If personal context is provided, use it to make scenarios and whatToDo more personally relevant.
+- Do NOT treat personal context as evidence about the contract. It describes the reader, not the document.
+- Use it naturally, only where it genuinely changes urgency or recommended action.
 
 OUTPUT SCHEMA — return a JSON object with exactly these fields:
 {
   "findings": [
     {
       "id": "<unique id like f-1, f-2>",
-      "title": "<short finding title>",
+      "title": "<short finding title — specific to this clause, not generic>",
       "severity": "<info|low|medium|high|critical>",
       "score": <0-100>,
       "tags": ["<TaxonomyTag values>"],
-      "shortWhy": "<one sentence>",
+      "shortWhy": "<one sentence explaining why this matters to the buyer>",
       "relatedClauseIds": ["<clause IDs from clauseCards>"],
       "impactType": "<cost|service-loss|cancellation|renewal|coverage|billing|usage-restriction|privacy|weak-remedy|linked-agreement|admin-trap|other>",
       "actionTiming": "<before-signing|before-renewal|before-cancellation|before-claim|if-problem-occurs|ongoing|info-only>",
@@ -2094,10 +2130,10 @@ OUTPUT SCHEMA — return a JSON object with exactly these fields:
       "clauseId": "<unique id like c-1>",
       "clauseLabel": "<short clause name>",
       "originalTextExcerpt": "<brief quote from excerpts, max 2 sentences>",
-      "atFirstGlance": "<1 sentence>",
-      "whatItMeans": "<1-2 sentences>",
-      "scenario": "<1-2 sentences>",
-      "whatToDo": ["<2-3 actionable steps>"],
+      "atFirstGlance": "<what a normal buyer would casually assume — 1 sentence, friendly tone>",
+      "whatItMeans": "<the catch / real practical impact — 1-2 sentences, direct>",
+      "scenario": "<concrete 'how you get burned' story with specific details — 1-2 sentences>",
+      "whatToDo": ["<time-aware actionable steps — 2-3 items>"],
       "goDeeper": "<1 sentence or empty string>"
     }
   ]
@@ -2108,9 +2144,7 @@ ISSUE PRESERVATION RULES — critical:
 - Preserve the mechanismType from each canonical issue.
 - Set sectionLabel on every finding.
 - Each finding must have exactly one corresponding clauseCard.
-- KEEP ALL PROSE ULTRA-COMPACT. Short sentences only.
-- Completing valid JSON is the TOP priority. Finish all arrays and objects.
-- Do NOT pad with filler text. Shorter is better.`;
+- Do NOT pad with filler text.`;
 
 function buildGroupSynthesisSystemPrompt(
   locale?: string,
@@ -2446,26 +2480,51 @@ export async function runPerSectionSynthesis(
   return results;
 }
 
-const VERDICT_SYNTHESIS_PROMPT = `You are PlainTerms. Given a set of already-synthesized findings from a contract analysis, produce ONLY a verdict summary and recommended actions.
+/** @internal Exported for test assertions on prompt content. */
+export const VERDICT_SYNTHESIS_PROMPT = `You are PlainTerms. Given a set of already-synthesized findings from a contract analysis, produce a verdict summary and recommended actions for an ordinary buyer.
 
 Do NOT regenerate findings or clause cards. They already exist.
+
+PLAIN-LANGUAGE RULES:
+- Write at a reading level a 12-year-old could follow.
+- Short sentences with common everyday words.
+- Sound like a calm, practical support worker — not a lawyer or policy analyst.
+- The headline should quickly tell the buyer whether this is likely a good deal, a risky deal, or somewhere in between.
+- The summary should name the biggest concrete risks and any genuine positives.
+- Do not force fake balance. If the contract is mostly poor value, say so clearly. If there are real protections, mention them briefly and honestly.
+
+PERSONAL CONTEXT:
+- If personal context is provided, use it to tailor the verdict and questions to that buyer's situation.
+- Make recommended questions and letter templates more personally relevant where the context genuinely applies.
+- Do NOT mention personal context awkwardly in every field. Use it naturally and only where it changes the advice.
+
+LEGALLY QUALIFIED CLAUSES:
+- Where findings note legal uncertainty, the verdict should reflect that honestly.
+- Do not overstate the harshest reading as guaranteed fact.
+- Suggest the buyer get written clarification where it matters.
 
 Output ONLY valid JSON with these fields:
 {
   "contractFamily": "<insurance|leases|contracts|finance|employment|telecom|gym|cloud-services>",
   "verdict": {
-    "headline": "<one-sentence overall assessment, specific to this document>",
-    "summary": "<2-4 sentence summary naming the specific concerns found>",
-    "severityOverall": "<info|low|medium|high|critical>",
-    "scoreOverall": <0-100 integer>
+    "headline": "<one-sentence buyer-facing assessment, specific to this document — tells the buyer what matters most>",
+    "summary": "<2-4 sentences naming the biggest concrete risks and any genuine positives, written for a normal person>"
   },
-  "recommendedQuestions": ["<2-5 practical questions the reader could ask>"],
-  "letterTemplates": [<0-2 templates if high/critical findings exist, otherwise empty array>],
+  "severityOverall": "<info|low|medium|high|critical>",
+  "scoreOverall": <0-100 integer>,
+  "recommendedQuestions": ["<2-5 practical questions the buyer could realistically ask and expect an answer>"],
+  "letterTemplates": [<see rules below>],
   "userQuestion": <string|null>,
   "userAnswer": <string|null>
 }
 
-Letter template shape (if included): { "id": "<lt-1>", "title": "<title>", "body": "<brief body>" }
+LETTER TEMPLATES:
+- If no findings are high or critical: return letterTemplates as an empty array [].
+- If high or critical findings exist: generate 1-3 targeted templates with DIFFERENT intents (clarification, complaint, or cancellation). Each body must reference specific clauses.
+- ALSO include one combined clarification letter (id "lt-combined") that covers the main issues in a single message. Title it something like "Combined clarification letter — all key concerns". The body should list the key questions and concerns from the top findings in one practical letter the buyer could send.
+- Make it clear via titles that both targeted and combined options exist.
+
+Letter template shape: { "id": "<lt-1>", "title": "<title>", "body": "<letter body text>" }
 
 SCORING:
 - 1-2 low findings → 85-95
@@ -2524,8 +2583,8 @@ async function synthesizeVerdict(
       verdict: {
         headline: parsed.verdict?.headline ?? "Analysis complete.",
         summary: parsed.verdict?.summary ?? "",
-        severityOverall: parsed.verdict?.severityOverall ?? computeOverallSeverity(findings),
-        scoreOverall: parsed.verdict?.scoreOverall ?? computeOverallScore(findings),
+        severityOverall: parsed.verdict?.severityOverall ?? parsed.severityOverall ?? computeOverallSeverity(findings),
+        scoreOverall: parsed.verdict?.scoreOverall ?? parsed.scoreOverall ?? computeOverallScore(findings),
       },
       contractFamily: normalizeContractFamily(parsed.contractFamily) as Report["contractFamily"],
       recommendedQuestions: Array.isArray(parsed.recommendedQuestions) ? parsed.recommendedQuestions : [],

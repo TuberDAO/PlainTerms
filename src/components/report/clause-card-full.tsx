@@ -26,13 +26,44 @@ function Section({
   );
 }
 
-export function ClauseCardFull({ clause }: { clause: ClauseCard }) {
+interface ClauseCardFullProps {
+  clause: ClauseCard;
+  startCollapsed?: boolean;
+}
+
+export function ClauseCardFull({ clause, startCollapsed }: ClauseCardFullProps) {
+  const [revealed, setRevealed] = useState(!startCollapsed);
   const [expanded, setExpanded] = useState(false);
+
+  if (!revealed) {
+    return (
+      <Card className="overflow-hidden rounded-xl">
+        <CardContent className="p-0">
+          <div className="px-5 py-5 sm:px-6">
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              {clause.clauseLabel}
+            </p>
+            <Section title="At first glance" bg="bg-muted/20">
+              <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
+                {clause.atFirstGlance}
+              </p>
+            </Section>
+            <button
+              onClick={() => setRevealed(true)}
+              className="mt-3 flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-primary transition-colors hover:bg-primary/5"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+              Reveal the catch
+            </button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card className="overflow-hidden rounded-xl">
       <CardContent className="p-0">
-        {/* Clause header */}
         <div className="border-b bg-muted/20 px-5 py-5 sm:px-6">
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             {clause.clauseLabel}
@@ -43,14 +74,12 @@ export function ClauseCardFull({ clause }: { clause: ClauseCard }) {
         </div>
 
         <div className="space-y-5 px-5 py-6 sm:px-6">
-          {/* At first glance */}
           <Section title="At first glance" bg="bg-muted/20">
             <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
               {clause.atFirstGlance}
             </p>
           </Section>
 
-          {/* What it really means */}
           <Section title="What it really means" bg="bg-red-50/50">
             <p className="max-w-prose text-sm leading-relaxed text-foreground/80">
               {clause.whatItMeans}
@@ -58,14 +87,12 @@ export function ClauseCardFull({ clause }: { clause: ClauseCard }) {
             <SimplifyBlock text={clause.whatItMeans} />
           </Section>
 
-          {/* What could happen */}
           <Section title="What could happen" bg="bg-amber-50/50">
             <p className="max-w-prose text-sm leading-relaxed text-foreground/80">
               {clause.scenario}
             </p>
           </Section>
 
-          {/* What to do */}
           <Section title="What to do">
             <ul className="space-y-1.5">
               {clause.whatToDo.map((item, i) => (
@@ -80,7 +107,6 @@ export function ClauseCardFull({ clause }: { clause: ClauseCard }) {
             </ul>
           </Section>
 
-          {/* Go deeper (expandable) */}
           {(clause.goDeeper || clause.risks || clause.negotiation) && (
             <div className="pt-1">
               <button

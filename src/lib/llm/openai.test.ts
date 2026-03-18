@@ -26,6 +26,8 @@ import {
   estimateGroupTokenBudget,
   estimateSectionTokenBudget,
   classifyExtractionError,
+  GROUP_SYNTHESIS_SYSTEM_PROMPT,
+  VERDICT_SYNTHESIS_PROMPT,
   type ChunkIssue,
   type SectionSummary,
 } from "./openai";
@@ -1318,5 +1320,73 @@ describe("runPerSectionSynthesis", () => {
       Math.ceil(52 / ISSUES_PER_SYNTH_GROUP) +
       Math.ceil(21 / ISSUES_PER_SYNTH_GROUP);
     expect(calls.length).toBe(expectedGroups);
+  });
+});
+
+describe("GROUP_SYNTHESIS_SYSTEM_PROMPT buyer-facing rules", () => {
+  it("requires plain language at a 12-year-old reading level", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("12-year-old");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("short sentences");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("common everyday words");
+  });
+
+  it("requires support-worker tone, not legal/academic", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("support worker");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("not a lawyer");
+  });
+
+  it("requires at-first-glance vs what-it-really-means framing", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("atFirstGlance");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("whatItMeans");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("the catch");
+  });
+
+  it("includes personal context handling rules", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("personal context");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("personally relevant");
+  });
+
+  it("includes legally qualified clause handling", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("outside law");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("written clarification");
+  });
+
+  it("preserves issue preservation rules", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("EXACTLY ONE finding per canonical issue");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("No merging");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("mechanismType");
+  });
+
+  it("still requires valid JSON output", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Output ONLY valid JSON");
+  });
+});
+
+describe("VERDICT_SYNTHESIS_PROMPT buyer-facing rules", () => {
+  it("requires plain language at a 12-year-old reading level", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("12-year-old");
+  });
+
+  it("requires support-worker tone", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("support worker");
+  });
+
+  it("includes personal context handling", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("personal context");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("tailor the verdict");
+  });
+
+  it("includes combined clarification letter template", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("lt-combined");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("combined clarification");
+  });
+
+  it("includes legally qualified clause handling", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("legal uncertainty");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("written clarification");
+  });
+
+  it("does not regenerate findings", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Do NOT regenerate findings");
   });
 });
