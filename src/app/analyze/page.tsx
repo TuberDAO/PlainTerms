@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, Suspense, useRef } from "react";
+import { useState, useCallback, useEffect, Suspense, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,14 +18,21 @@ import { track } from "@/lib/analytics/tracker";
 import { useLocale } from "@/lib/locale/context";
 import { createBrowserClient } from "@/lib/supabase/client";
 import Link from "next/link";
+import { shouldUseLargeDocPipeline } from "@/lib/llm/large-doc-routing";
+import {
+  getPersonalContextHintLines,
+  getPersonalContextPlaceholder,
+} from "@/lib/analyze/personal-context-hints";
 
 const GENERATE_STAGES = [
-  { label: "Analysing your document", pct: 8, durationMs: 1200 },
-  { label: "Identifying key clauses", pct: 20, durationMs: 2000 },
-  { label: "Reviewing contract terms", pct: 42, durationMs: 8000 },
-  { label: "Reviewing key clauses", pct: 66, durationMs: 12000 },
-  { label: "Preparing your PlainTerms report", pct: 86, durationMs: 15000 },
-  { label: "Saving your report", pct: 93, durationMs: 4000 },
+  { label: "Step 1 of 5: reading your document", pct: 8, durationMs: 1200 },
+  { label: "Step 2 of 5: identifying key clauses", pct: 20, durationMs: 2000 },
+  { label: "Step 3 of 5: reviewing contract terms", pct: 42, durationMs: 8000 },
+  { label: "Step 4 of 5: reviewing each section in detail", pct: 66, durationMs: 12000 },
+  { label: "Step 5 of 5: preparing your report", pct: 86, durationMs: 15000 },
+  { label: "Finishing the final checks", pct: 93, durationMs: 4000 },
+  { label: "Saving your report", pct: 96, durationMs: 6000 },
+  { label: "Preparing your results", pct: 98, durationMs: 8000 },
 ] as const;
 
 interface IngestSection {
@@ -61,6 +68,8 @@ function AnalyzeContent() {
   const [generateStage, setGenerateStage] = useState("");
   const [generatePct, setGeneratePct] = useState(0);
   const generateInflight = useRef(false);
+  const generateStartedAt = useRef(0);
+  const [generateElapsedSec, setGenerateElapsedSec] = useState(0);
   const [audienceChoice, setAudienceChoice] = useState("");
   const [audienceCustom, setAudienceCustom] = useState("");
   const [jurisdictionChoice, setJurisdictionChoice] = useState("");
@@ -68,11 +77,18 @@ function AnalyzeContent() {
   const [contractTypeChoice, setContractTypeChoice] = useState("");
   const [contractTypeCustom, setContractTypeCustom] = useState("");
   const [showTechDetails, setShowTechDetails] = useState(false);
-  const [questionText, setQuestionText] = useState("");
   const [personalContext, setPersonalContext] = useState("");
   const [allSectionsSelected, setAllSectionsSelected] = useState(true);
   const [sectionToggles, setSectionToggles] = useState<boolean[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!generating) return;
+    const iv = setInterval(() => {
+      setGenerateElapsedSec(Math.floor((Date.now() - generateStartedAt.current) / 1000));
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [generating]);
 
   const audienceContext =
     audienceChoice === "other"
@@ -224,6 +240,8 @@ function AnalyzeContent() {
   async function handleGenerateReport() {
     if (generateInflight.current) return;
     generateInflight.current = true;
+    generateStartedAt.current = Date.now();
+    setGenerateElapsedSec(0);
     setGenerating(true);
     setGenerateError(null);
     setError(null);
@@ -256,10 +274,18 @@ function AnalyzeContent() {
       setGenerateStage("Analysing contract");
       setGeneratePct(20);
 
-      const hasSections = payload.sections && payload.sections.length > 0;
+      const payloadHasSections = payload.sections && payload.sections.length > 0;
       let selectedIndices: number[] | undefined;
-      if (hasSections) {
-        if (allSectionsSelected) {
+      if (payloadHasSections) {
+        if (payload.isTruncated) {
+          selectedIndices = sectionToggles
+            .map((on, i) => (on ? i : -1))
+            .filter((i) => i >= 0);
+          if (selectedIndices.length === 0) {
+            setGenerateError("Please select at least one section to review.");
+            return;
+          }
+        } else if (allSectionsSelected) {
           selectedIndices = payload.sections!.map((_: IngestSection, i: number) => i);
         } else {
           selectedIndices = sectionToggles
@@ -286,8 +312,7 @@ function AnalyzeContent() {
           jurisdictionContext: jurisdictionContext || undefined,
           contractTypeHint: contractTypeHint || undefined,
           personalContext: personalContext.trim() || undefined,
-          question: questionText.trim() || undefined,
-          ...(hasSections
+          ...(payloadHasSections
             ? {
                 sections: payload.sections,
                 selectedSectionIndices: selectedIndices,
@@ -322,7 +347,7 @@ function AnalyzeContent() {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setGenerateError(
         msg.includes("Failed to fetch")
-          ? "Network error — please check your connection and try again."
+          ? "Network error. Please check your connection and try again."
           : `Report generation failed: ${msg}`,
       );
     } finally {
@@ -360,6 +385,31 @@ function AnalyzeContent() {
     const dropped = e.dataTransfer.files?.[0];
     handleFileSelect(dropped);
   }
+
+  const PERSONAL_CONTEXT_MAX = 1500;
+  const MAX_SECTIONS_WHEN_TRUNCATED = 3;
+
+  const isTruncatedDoc = ingestResult?.isTruncated === true;
+  const hasSections = ingestResult?.sections && ingestResult.sections.length > 0;
+  const ingestUsesLargePipeline =
+    ingestResult != null &&
+    shouldUseLargeDocPipeline(
+      ingestResult.charCount,
+      ingestResult.chunkCount,
+    );
+
+  const selectedSectionCount = allSectionsSelected
+    ? (ingestResult?.sections?.length ?? 0)
+    : sectionToggles.filter(Boolean).length;
+
+  const totalAvailableSections = ingestResult?.sections?.length ?? 0;
+  const effectiveMaxSections = Math.min(MAX_SECTIONS_WHEN_TRUNCATED, Math.max(totalAvailableSections - 1, 1));
+
+  const truncatedAndAllSelected = isTruncatedDoc && allSectionsSelected;
+  const truncatedTooManySections = isTruncatedDoc && !allSectionsSelected && selectedSectionCount > effectiveMaxSections;
+  const truncatedAllManuallySelected = isTruncatedDoc && !allSectionsSelected && totalAvailableSections > 1 && selectedSectionCount >= totalAvailableSections;
+  const truncatedNoSections = isTruncatedDoc && !allSectionsSelected && selectedSectionCount === 0;
+  const truncatedBlocked = truncatedAndAllSelected || truncatedTooManySections || truncatedAllManuallySelected || truncatedNoSections;
 
   const hasInput = file !== null || text.trim().length > 0;
 
@@ -419,7 +469,7 @@ function AnalyzeContent() {
                 </label>
               </p>
               <p className="text-xs text-muted-foreground">
-                PDF or DOCX — max 10 MB
+                PDF or DOCX (max 10 MB)
               </p>
             </div>
 
@@ -459,8 +509,9 @@ function AnalyzeContent() {
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
                     <p className="text-sm font-medium">
-                      Document imported and ready for your PlainTerms
-                      report.
+                      {isTruncatedDoc
+                        ? "Document imported, but it\u2019s very long."
+                        : "Document imported and ready for your PlainTerms report."}
                     </p>
                   </div>
                   <button
@@ -471,24 +522,99 @@ function AnalyzeContent() {
                     Clear
                   </button>
                 </div>
-                <p className="mt-1 pl-6 text-xs text-muted-foreground">
-                  Next: Generate report.
-                </p>
-                {ingestResult.isTruncated && (
-                  <p className="mt-1 pl-6 text-xs text-amber-600">
-                    This document exceeded the maximum size and was truncated.
-                    Some late sections may not be covered.
-                  </p>
+
+                {/* === Truncated document: gated section-selection flow === */}
+                {isTruncatedDoc && (
+                  <div className="mt-3 ml-6 rounded-lg border border-amber-200 bg-amber-50/60 p-4" data-testid="truncated-gate">
+                    <p className="text-sm font-medium text-amber-900">
+                      This document is very long. We cannot review all of it at once right now.
+                    </p>
+                    <p className="mt-1.5 text-xs leading-relaxed text-amber-800/80">
+                      You can choose a few sections to review now, and come back for the others later.
+                      For long policies, many people start with the main terms first.
+                    </p>
+
+                    {hasSections ? (
+                      <fieldset className="mt-3">
+                        <legend className="text-xs font-medium text-amber-900">
+                          Choose up to {effectiveMaxSections} section{effectiveMaxSections !== 1 ? "s" : ""} to review now
+                        </legend>
+                        <div className="mt-2 space-y-1.5">
+                          {ingestResult.sections!.map((sec, i) => (
+                            <label
+                              key={`trunc-sec-${sec.label}-${i}`}
+                              className="flex items-center gap-2 text-xs text-amber-900/80"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={!allSectionsSelected && (sectionToggles[i] ?? false)}
+                                onChange={(e) => {
+                                  if (allSectionsSelected) {
+                                    setAllSectionsSelected(false);
+                                    const fresh = ingestResult.sections!.map(() => false);
+                                    fresh[i] = e.target.checked;
+                                    setSectionToggles(fresh);
+                                  } else {
+                                    const next = [...sectionToggles];
+                                    next[i] = e.target.checked;
+                                    setSectionToggles(next);
+                                  }
+                                }}
+                                className="h-3.5 w-3.5 rounded border-amber-300"
+                              />
+                              <span>{sec.label}</span>
+                            </label>
+                          ))}
+                        </div>
+
+                        {!allSectionsSelected && selectedSectionCount > 0 && selectedSectionCount <= effectiveMaxSections && !truncatedAllManuallySelected && (
+                          <p className="mt-2 text-[11px] text-green-700">
+                            {selectedSectionCount} section{selectedSectionCount !== 1 ? "s" : ""} selected.
+                            Your report will cover these sections. You can review the others later.
+                          </p>
+                        )}
+                        {(truncatedTooManySections || truncatedAllManuallySelected) && (
+                          <p className="mt-2 text-[11px] text-amber-700">
+                            {truncatedAllManuallySelected
+                              ? "You cannot select all sections at once for a truncated document. Please leave at least one for a later review."
+                              : `Please select up to ${effectiveMaxSections} section${effectiveMaxSections !== 1 ? "s" : ""} at a time. You can review the rest in a later run.`}
+                          </p>
+                        )}
+                        {truncatedNoSections && !allSectionsSelected && (
+                          <p className="mt-2 text-[11px] text-amber-700">
+                            Select at least one section to continue.
+                          </p>
+                        )}
+                      </fieldset>
+                    ) : (
+                      <p className="mt-2 text-xs text-amber-800/70">
+                        No sections were detected in this document. Try uploading a shorter extract or a specific section of the policy.
+                      </p>
+                    )}
+
+                    <p className="mt-3 text-[11px] text-amber-700/70" data-testid="review-later-hint">
+                      You can review the other sections later by uploading the same document and selecting different sections.
+                    </p>
+                  </div>
                 )}
-                {ingestResult.charCount >= 150_000 && !ingestResult.isTruncated && (
+
+                {/* Non-truncated long doc info */}
+                {!isTruncatedDoc && ingestUsesLargePipeline && (
                   <p className="mt-1.5 pl-6 text-xs text-blue-600">
-                    Large document detected — multi-pass analysis will be used
+                    Large document detected. Multi-pass analysis will be used
                     for deeper coverage.
                   </p>
                 )}
 
-                {/* Section selection for large documents */}
-                {ingestResult.sections && ingestResult.sections.length > 0 && (
+                {/* Non-truncated: normal "Next" prompt */}
+                {!isTruncatedDoc && (
+                  <p className="mt-1 pl-6 text-xs text-muted-foreground">
+                    Next: Generate report.
+                  </p>
+                )}
+
+                {/* Section selection for non-truncated large documents */}
+                {!isTruncatedDoc && hasSections && (
                   <div className="mt-3 ml-6 rounded-lg border border-blue-100 bg-blue-50/40 p-3">
                     <fieldset>
                       <legend className="text-xs font-medium text-foreground">
@@ -514,9 +640,9 @@ function AnalyzeContent() {
                         <span className="font-medium">All sections</span>
                       </label>
                       <div className="mt-1.5 space-y-1 pl-5">
-                        {ingestResult.sections.map((sec, i) => (
+                        {ingestResult.sections!.map((sec, i) => (
                           <label
-                            key={i}
+                            key={`sec-${sec.label}-${i}`}
                             className="flex items-center gap-2 text-xs text-muted-foreground"
                           >
                             <input
@@ -597,7 +723,7 @@ function AnalyzeContent() {
                       }}
                       className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     >
-                      <option value="">Skip — general analysis</option>
+                      <option value="">Skip (general analysis)</option>
                       <option value="General consumer">
                         General consumer
                       </option>
@@ -642,7 +768,7 @@ function AnalyzeContent() {
                       }}
                       className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     >
-                      <option value="">Skip — auto-detect</option>
+                      <option value="">Skip (auto-detect)</option>
                       <option value="United Kingdom">
                         United Kingdom
                       </option>
@@ -692,7 +818,7 @@ function AnalyzeContent() {
                       }}
                       className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     >
-                      <option value="">Skip — auto-detect</option>
+                      <option value="">Skip (auto-detect)</option>
                       <option value="Health insurance">
                         Health insurance
                       </option>
@@ -735,58 +861,51 @@ function AnalyzeContent() {
 
                 <div className="ml-6 mt-3">
                   <label
-                    htmlFor="pt-question"
-                    className="block text-xs font-medium text-muted-foreground"
-                  >
-                    Got a specific question? (optional)
-                  </label>
-                  <input
-                    id="pt-question"
-                    name="question"
-                    type="text"
-                    value={questionText}
-                    onChange={(e) => setQuestionText(e.target.value)}
-                    placeholder="e.g., Can I cancel online?"
-                    className="mt-1.5 block w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                    maxLength={200}
-                  />
-                </div>
-
-                <div className="ml-6 mt-3">
-                  <label
                     htmlFor="pt-personal-context"
-                    className="block text-xs font-medium text-muted-foreground"
+                    className="block text-sm font-medium text-foreground"
                   >
-                    Anything about your situation that may matter? (optional)
+                    Tell us about your situation (optional)
                   </label>
-                  <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground/60">
-                    A few words can make the report more relevant. Example:{" "}
-                    <em>
-                      I have asthma, I travel a lot, I need to keep this
-                      number, I work from home.
-                    </em>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    Adding a few personal details helps us highlight the issues that matter most to you.
+                    This stays private and is only used to tailor your report.
                   </p>
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground/70">
+                    For example, you could mention:
+                  </p>
+                  <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground/70" data-testid="personal-context-hints">
+                    {getPersonalContextHintLines(contractTypeChoice).map(
+                      (line) => (
+                        <li key={line}>• {line}</li>
+                      ),
+                    )}
+                  </ul>
                   <textarea
                     id="pt-personal-context"
                     name="personalContext"
                     value={personalContext}
                     onChange={(e) =>
-                      setPersonalContext(e.target.value.slice(0, 500))
+                      setPersonalContext(e.target.value.slice(0, PERSONAL_CONTEXT_MAX))
                     }
-                    placeholder="e.g., I have a pre-existing condition and need reliable cover..."
-                    rows={2}
-                    className="mt-1.5 block w-full resize-y rounded-md border bg-background px-3 py-2 text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                    maxLength={500}
+                    placeholder={getPersonalContextPlaceholder(
+                      contractTypeChoice,
+                    )}
+                    rows={4}
+                    className="mt-2 block w-full resize-y rounded-md border bg-background px-3 py-2.5 text-sm leading-relaxed placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-ring"
+                    maxLength={PERSONAL_CONTEXT_MAX}
                   />
-                  {personalContext.length > 0 && (
-                    <p className="mt-1 text-right text-[11px] text-muted-foreground/50">
-                      {personalContext.length}/500
+                  <div className="mt-1 flex items-center justify-between">
+                    <p className="text-[11px] text-muted-foreground/50">
+                      Short bullet points are fine. Best results: 200 to 800 characters. Max: {PERSONAL_CONTEXT_MAX.toLocaleString()}.
                     </p>
-                  )}
+                    <p className="text-[11px] text-muted-foreground/50" data-testid="personal-context-counter">
+                      {personalContext.length} / {PERSONAL_CONTEXT_MAX.toLocaleString()}
+                    </p>
+                  </div>
                 </div>
 
                 {generating ? (
-                  <div className="mt-5 rounded-xl border border-green-200 bg-green-50/60 p-5">
+                  <div className="mt-5 rounded-xl border border-green-200 bg-green-50/60 p-5" data-testid="progress-panel">
                     <p className="text-sm font-semibold text-green-900">
                       {generateStage}
                     </p>
@@ -796,12 +915,29 @@ function AnalyzeContent() {
                         style={{ width: `${generatePct}%` }}
                       />
                     </div>
-                    <p className="mt-2.5 text-xs text-green-700/80">
-                      {generatePct < 55
-                        ? ingestResult && ingestResult.charCount >= 150_000
-                          ? "Multi-pass analysis in progress — this takes longer for large documents."
-                          : "Longer documents can take a little longer — we're reading everything carefully."
-                        : "Almost ready. Please keep this tab open."}
+                    <p className="mt-2.5 text-xs text-green-700/80" data-testid="progress-detail">
+                      {generatePct < 30
+                        ? ingestResult && ingestUsesLargePipeline
+                          ? "Large documents take longer because we review each section in detail. Estimated time: about 6 to 10 minutes."
+                          : "We're reading everything carefully. Most reports take 1 to 3 minutes."
+                        : generatePct < 70
+                          ? ingestResult && ingestUsesLargePipeline
+                            ? "Still working on each section. Large documents usually take 6 to 10 minutes total."
+                            : "Working through the details."
+                          : generatePct < 95
+                            ? ingestResult && ingestUsesLargePipeline
+                              ? "Large documents can take a bit longer in the final step. Estimated time left: about 1 to 3 minutes."
+                              : "Almost ready. Just finishing up."
+                            : generateElapsedSec < 60
+                              ? "Saving your report now."
+                              : generateElapsedSec < 180
+                                ? "Still saving. Large reports take a bit longer."
+                                : generateElapsedSec < 360
+                                  ? "Almost there. The review is still running."
+                                  : "This is taking longer than usual, but the review is still running. Please wait."}
+                    </p>
+                    <p className="mt-2 text-[11px] font-medium text-green-800/60" data-testid="anti-refresh-warning">
+                      Please keep this tab open. Refreshing may restart the review.
                     </p>
                   </div>
                 ) : (
@@ -819,61 +955,77 @@ function AnalyzeContent() {
                         size="lg"
                         className="gap-2 rounded-lg px-8 font-semibold shadow-sm"
                         onClick={handleGenerateReport}
-                        disabled={generating}
+                        disabled={generating || truncatedBlocked}
+                        data-testid="generate-button"
                       >
                         <FileText className="h-4 w-4" />
-                        Generate PlainTerms report
+                        {isTruncatedDoc
+                          ? `Review ${selectedSectionCount} selected section${selectedSectionCount !== 1 ? "s" : ""}`
+                          : "Generate PlainTerms report"}
                       </Button>
                     </div>
+                    {truncatedBlocked && !generating && (
+                      <p className="mt-2 text-center text-xs text-amber-700" data-testid="truncated-blocked-hint">
+                        {truncatedAndAllSelected
+                          ? "Please choose specific sections above to continue."
+                          : truncatedAllManuallySelected
+                            ? "You cannot review all sections at once. Please deselect at least one."
+                            : truncatedTooManySections
+                              ? `Please select up to ${effectiveMaxSections} section${effectiveMaxSections !== 1 ? "s" : ""} at a time.`
+                              : "Select at least one section to continue."}
+                      </p>
+                    )}
                   </>
                 )}
               </div>
             )}
 
             {/* Action buttons */}
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row" data-testid="cta-row">
               {!ingestResult && (
-                <Button
-                  size="lg"
-                  className="flex-1 gap-2 rounded-lg font-semibold shadow-sm"
-                  onClick={handleIngest}
-                  disabled={ingesting || !hasInput}
-                >
-                  {ingesting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <FileText className="h-4 w-4" />
-                  )}
-                  {ingesting ? "Importing document..." : "Import and analyze"}
-                </Button>
-              )}
-              <Button
-                size="lg"
-                variant="outline"
-                className="flex-1 gap-2 rounded-lg"
-                onClick={handleViewExample}
-              >
-                <Eye className="h-4 w-4" />
-                View example report
-              </Button>
-              {!ingestResult && (
-                <Button
-                  variant="outline"
-                  size="lg"
-                  className="flex-1 gap-2 rounded-lg"
-                  asChild
-                >
-                  <Link href="/account">
-                    <LogIn className="h-4 w-4" />
-                    Sign in to save
-                  </Link>
-                </Button>
+                <>
+                  <Button
+                    size="lg"
+                    className="flex-1 gap-2 rounded-lg font-semibold shadow-sm"
+                    onClick={handleIngest}
+                    disabled={ingesting || !hasInput}
+                  >
+                    {ingesting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <FileText className="h-4 w-4" />
+                    )}
+                    {ingesting ? "Importing document..." : "Import and analyze"}
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="flex-1 gap-2 rounded-lg"
+                    onClick={handleViewExample}
+                  >
+                    <Eye className="h-4 w-4" />
+                    View example report
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    className="flex-1 gap-2 rounded-lg"
+                    asChild
+                  >
+                    <Link href="/account">
+                      <LogIn className="h-4 w-4" />
+                      Sign in to save
+                    </Link>
+                  </Button>
+                </>
               )}
             </div>
 
             <p className="mt-5 text-center text-xs text-muted-foreground">
-              Your report is saved to your account. Your original document
-              text is not stored. This is not legal advice.
+              Your report is saved for this session.{" "}
+              <Link href="/account" className="font-medium text-primary hover:underline">Sign in</Link>{" "}
+              to keep it permanently. Your original document text is not kept after analysis.
+              This is not legal advice.
             </p>
           </CardContent>
         </Card>

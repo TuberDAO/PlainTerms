@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createRouteHandlerClient } from "@/lib/supabase/server";
-import { runReportAnalysis, LARGE_DOC_THRESHOLD_CHARS } from "@/lib/llm/openai";
+import { runReportAnalysis } from "@/lib/llm/openai";
+import { shouldUseLargeDocPipeline } from "@/lib/llm/large-doc-routing";
+import { analysisErrorToApiResult } from "@/lib/report/analysis-errors";
 import { createReport } from "@/lib/reports";
 import { checkDocumentRelevance } from "@/lib/llm/relevance-check";
 
@@ -66,11 +68,28 @@ export async function POST(request: NextRequest) {
       return jsonError("Invalid ingest payload.", 400);
     }
 
+    const PERSONAL_CONTEXT_MAX_CHARS = 1500;
+    if (
+      typeof personalContext === "string" &&
+      personalContext.length > PERSONAL_CONTEXT_MAX_CHARS
+    ) {
+      log("personal_context_too_long", { length: personalContext.length });
+      return jsonError(
+        `Personal context must be ${PERSONAL_CONTEXT_MAX_CHARS.toLocaleString()} characters or fewer.`,
+        400,
+        { code: "PERSONAL_CONTEXT_TOO_LONG" },
+      );
+    }
+
     const totalCharCount: number =
       typeof ingest.charCount === "number"
         ? ingest.charCount
         : ingest.chunks.reduce((s: number, c: string) => s + c.length, 0);
-    const isLargeDoc = totalCharCount >= LARGE_DOC_THRESHOLD_CHARS;
+    const chunkCount =
+      typeof ingest.chunkCount === "number"
+        ? ingest.chunkCount
+        : ingest.chunks.length;
+    const isLargeDoc = shouldUseLargeDocPipeline(totalCharCount, chunkCount);
 
     log("input_validated", {
       chunkCount: ingest.chunks.length,
@@ -123,7 +142,7 @@ export async function POST(request: NextRequest) {
             : undefined,
         personalContext:
           typeof personalContext === "string" && personalContext.trim()
-            ? personalContext.trim().slice(0, 500)
+            ? personalContext.trim().slice(0, PERSONAL_CONTEXT_MAX_CHARS)
             : undefined,
         question:
           typeof question === "string" && question.trim()
@@ -138,20 +157,17 @@ export async function POST(request: NextRequest) {
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown LLM error";
-      const code = (err as unknown as Record<string, unknown>)?.code;
+      const rec = err as unknown as Record<string, unknown>;
+      const code = rec?.code;
       log("llm_analysis_failed", {
         error: msg,
         code: code ?? undefined,
         ...(isDev && err instanceof Error ? { stack: err.stack } : {}),
       });
 
-      if (code === "TRUNCATED_OUTPUT") {
-        return jsonError(
-          "This document produced a very large analysis that could not be completed in one pass. " +
-          "Try selecting a specific contract type or reducing the document length.",
-          500,
-          { code: "TRUNCATED_OUTPUT" },
-        );
+      const mapped = analysisErrorToApiResult(err);
+      if (mapped) {
+        return jsonError(mapped.message, mapped.status, { code: mapped.code });
       }
 
       return jsonError(

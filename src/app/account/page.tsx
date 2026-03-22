@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { LogIn, LogOut, ArrowUpCircle, User, AlertCircle } from "lucide-react";
+import { LogIn, LogOut, User, AlertCircle } from "lucide-react";
 import { createBrowserClient } from "@/lib/supabase/client";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { Suspense } from "react";
@@ -17,7 +17,9 @@ function AccountContent() {
 
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [signOutLoading, setSignOutLoading] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   const supabase = createBrowserClient();
 
@@ -37,31 +39,64 @@ function AccountContent() {
   }, [supabase.auth]);
 
   async function handleGoogleSignIn() {
-    setActionLoading(true);
-    await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
+    setOauthError(null);
+    setGoogleLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (error) {
+        setOauthError(
+          error.message ||
+            "Google sign in could not start. Check your connection and try again.",
+        );
+      }
+    } finally {
+      setGoogleLoading(false);
+    }
   }
 
   async function handleGoogleUpgrade() {
-    setActionLoading(true);
-    await supabase.auth.linkIdentity({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
+    setOauthError(null);
+    setGoogleLoading(true);
+    try {
+      const { error } = await supabase.auth.linkIdentity({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (error) {
+        setOauthError(
+          error.message ||
+            "Linking Google could not start. Check your connection and try again.",
+        );
+      }
+    } finally {
+      setGoogleLoading(false);
+    }
   }
 
   async function handleSignOut() {
-    setActionLoading(true);
-    await supabase.auth.signOut();
-    setUser(null);
-    setActionLoading(false);
-    router.refresh();
+    setOauthError(null);
+    setSignOutLoading(true);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        setOauthError(
+          error.message ||
+            "Sign out did not complete. Please try again.",
+        );
+        return;
+      }
+      setUser(null);
+      router.refresh();
+    } finally {
+      setSignOutLoading(false);
+    }
   }
 
   const isAnonymous = user?.is_anonymous === true;
@@ -81,10 +116,10 @@ function AccountContent() {
           Account
         </h1>
 
-        {authError && (
+        {(authError || oauthError) && (
           <div className="mt-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
-            <p>Sign-in failed. Please try again.</p>
+            <p>{oauthError ?? "Sign-in failed. Please try again."}</p>
           </div>
         )}
 
@@ -103,7 +138,7 @@ function AccountContent() {
                   className="w-full gap-2 rounded-lg font-semibold shadow-sm"
                   size="lg"
                   onClick={handleGoogleSignIn}
-                  disabled={actionLoading}
+                  disabled={googleLoading}
                 >
                   <LogIn className="h-4 w-4" />
                   Continue with Google
@@ -118,18 +153,18 @@ function AccountContent() {
                   <User className="mx-auto h-10 w-10 text-muted-foreground/40" />
                   <p className="mt-3 text-sm font-medium">Guest account</p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Upgrade to keep your reports permanently and access
-                    them from any device.
+                    Your reports are saved for this session. Sign in with
+                    Google to keep them permanently and access from any device.
                   </p>
                 </div>
                 <Button
                   className="w-full gap-2 rounded-lg font-semibold shadow-sm"
                   size="lg"
                   onClick={handleGoogleUpgrade}
-                  disabled={actionLoading}
+                  disabled={googleLoading}
                 >
-                  <ArrowUpCircle className="h-4 w-4" />
-                  Upgrade with Google
+                  <LogIn className="h-4 w-4" />
+                  Sign in with Google
                 </Button>
                 <Separator />
                 <Button
@@ -137,7 +172,7 @@ function AccountContent() {
                   size="sm"
                   className="w-full gap-2 text-muted-foreground"
                   onClick={handleSignOut}
-                  disabled={actionLoading}
+                  disabled={signOutLoading}
                 >
                   <LogOut className="h-4 w-4" />
                   Sign out
@@ -166,7 +201,7 @@ function AccountContent() {
                   variant="outline"
                   className="w-full gap-2 rounded-lg"
                   onClick={handleSignOut}
-                  disabled={actionLoading}
+                  disabled={signOutLoading}
                 >
                   <LogOut className="h-4 w-4" />
                   Sign out

@@ -5,28 +5,28 @@ import { Badge } from "@/components/ui/badge";
 import { isMetadataLowConfidence } from "@/lib/report/rank-findings";
 
 const IMPACT_LABELS: Record<string, string> = {
-  cost: "Cost",
-  "service-loss": "Service loss",
-  cancellation: "Cancellation",
-  renewal: "Renewal",
-  coverage: "Coverage",
-  billing: "Billing",
-  "usage-restriction": "Usage",
-  privacy: "Privacy",
-  "weak-remedy": "Weak remedy",
-  "linked-agreement": "Linked",
-  "admin-trap": "Admin trap",
+  cost: "Extra cost risk",
+  "service-loss": "Service at risk",
+  cancellation: "Hard to cancel",
+  renewal: "Renewal risk",
+  coverage: "Coverage limit",
+  billing: "Billing issue",
+  "usage-restriction": "Usage limit",
+  privacy: "Privacy concern",
+  "weak-remedy": "Weak protection",
+  "linked-agreement": "Linked contract",
+  "admin-trap": "Paperwork trap",
   other: "Other",
 };
 
 const TIMING_LABELS: Record<string, string> = {
-  "before-signing": "Before signing",
-  "before-renewal": "Before renewal",
-  "before-cancellation": "Before cancelling",
-  "before-claim": "Before a claim",
-  "if-problem-occurs": "If problem occurs",
-  ongoing: "Ongoing",
-  "info-only": "Info only",
+  "before-signing": "Check before buying",
+  "before-renewal": "Check before renewal",
+  "before-cancellation": "Check before cancelling",
+  "before-claim": "Know before a claim",
+  "if-problem-occurs": "If something goes wrong",
+  ongoing: "Keep checking",
+  "info-only": "Good to know",
 };
 
 const RELEVANCE_STYLES: Record<string, string> = {
@@ -37,20 +37,20 @@ const RELEVANCE_STYLES: Record<string, string> = {
 };
 
 const RELEVANCE_LABELS: Record<string, string> = {
-  "decision-critical": "Decision-critical",
-  important: "Important",
-  monitor: "Monitor",
-  background: "Background",
+  "decision-critical": "Check before buying",
+  important: "Worth knowing",
+  monitor: "Keep an eye on",
+  background: "For reference",
 };
 
-// Card-level visual weight by decisionRelevance.
-// background/monitor cards get slightly reduced opacity so urgent issues read first.
 const CARD_STYLES: Record<string, string> = {
   "decision-critical": "rounded-xl border border-amber-200 bg-amber-50/30 p-5 transition-shadow hover:shadow-sm sm:p-6",
   important: "rounded-xl border bg-card p-5 transition-shadow hover:shadow-sm sm:p-6",
   monitor: "rounded-xl border bg-card p-5 opacity-80 transition-shadow hover:shadow-sm hover:opacity-100 sm:p-6",
   background: "rounded-xl border bg-muted/30 p-5 opacity-70 transition-shadow hover:shadow-sm hover:opacity-100 sm:p-6",
 };
+
+const MAX_TAGS_SHOWN = 2;
 
 export function FindingsList({ findings, heading }: { findings: Finding[]; heading?: string }) {
   const lowConfidence = isMetadataLowConfidence(findings);
@@ -60,25 +60,24 @@ export function FindingsList({ findings, heading }: { findings: Finding[]; headi
       {heading !== undefined && (
         <h2 className="text-lg font-semibold sm:text-xl">{heading}</h2>
       )}
-      {findings.map((finding) => {
+      {findings.map((finding, findingIdx) => {
         const cardClass =
           !lowConfidence && finding.decisionRelevance
             ? (CARD_STYLES[finding.decisionRelevance] ?? CARD_STYLES.important)
             : "rounded-xl border bg-card p-5 transition-shadow hover:shadow-sm sm:p-6";
 
-        // Only show action timing badge when metadata is meaningful and timing
-        // adds information (i.e., not the default "before-signing").
         const showTimingBadge =
           !lowConfidence &&
           finding.actionTiming &&
           finding.actionTiming !== "before-signing" &&
           finding.actionTiming !== "info-only";
 
-        // Only show relevance pill when metadata is meaningful.
         const showRelevancePill = !lowConfidence && finding.decisionRelevance;
 
+        const visibleTags = finding.tags.slice(0, MAX_TAGS_SHOWN);
+
         return (
-          <div key={finding.id} className={cardClass}>
+          <div key={`finding-${findingIdx}-${finding.id}`} className={cardClass}>
             <div className="flex flex-wrap items-start justify-between gap-2">
               <h3 className="text-sm font-semibold sm:text-base">
                 {finding.title}
@@ -89,9 +88,9 @@ export function FindingsList({ findings, heading }: { findings: Finding[]; headi
               {finding.shortWhy}
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
-              {finding.tags.map((tag) => (
+              {visibleTags.map((tag) => (
                 <Badge
-                  key={tag}
+                  key={`${finding.id}-tag-${tag}`}
                   variant="secondary"
                   className="text-xs font-normal"
                 >

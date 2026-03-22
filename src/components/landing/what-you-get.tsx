@@ -15,7 +15,7 @@ const FEATURES = [
   },
   {
     icon: AlertTriangle,
-    title: "Risk scoring",
+    title: "Risk highlights",
     description: "See which clauses carry the most risk at a glance.",
   },
   {
@@ -36,7 +36,7 @@ const FEATURES = [
   {
     icon: Lock,
     title: "Privacy first",
-    description: "Your documents are never stored or shared. Ever.",
+    description: "Your document text is not kept after analysis. Only your report is saved to your account.",
   },
 ];
 

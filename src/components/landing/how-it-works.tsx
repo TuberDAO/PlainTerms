@@ -10,9 +10,9 @@ const STEPS = [
   },
   {
     icon: Search,
-    title: "2. Instant analysis",
+    title: "2. Detailed analysis",
     description:
-      "Our AI reads every clause and flags what matters — hidden fees, tricky deadlines, unfair terms — explained in plain language.",
+      "Our AI reads every clause and flags what matters — hidden fees, tricky deadlines, unfair terms — explained in plain language. Large documents take a few minutes.",
   },
   {
     icon: ShieldCheck,

@@ -50,11 +50,11 @@ export function Hero() {
               </span>
               <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
                 <Lock className="h-4 w-4" />
-                No document stored
+                Document not kept after analysis
               </span>
               <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
                 <Eye className="h-4 w-4" />
-                Instant results
+                Results in minutes
               </span>
             </div>
           </div>

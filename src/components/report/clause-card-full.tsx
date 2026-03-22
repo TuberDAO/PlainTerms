@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { ClauseCard } from "@/types/report";
-import { SimplifyBlock } from "./simplify-block";
 
 function Section({
   title,
@@ -84,7 +83,6 @@ export function ClauseCardFull({ clause, startCollapsed }: ClauseCardFullProps) 
             <p className="max-w-prose text-sm leading-relaxed text-foreground/80">
               {clause.whatItMeans}
             </p>
-            <SimplifyBlock text={clause.whatItMeans} />
           </Section>
 
           <Section title="What could happen" bg="bg-amber-50/50">
@@ -97,7 +95,7 @@ export function ClauseCardFull({ clause, startCollapsed }: ClauseCardFullProps) 
             <ul className="space-y-1.5">
               {clause.whatToDo.map((item, i) => (
                 <li
-                  key={i}
+                  key={`todo-${clause.clauseId}-${i}`}
                   className="flex items-start gap-2.5 text-sm leading-relaxed text-muted-foreground"
                 >
                   <span className="mt-2 block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
@@ -145,7 +143,7 @@ export function ClauseCardFull({ clause, startCollapsed }: ClauseCardFullProps) 
                           <ul className="mt-2 space-y-1.5">
                             {clause.risks.map((risk, i) => (
                               <li
-                                key={i}
+                                key={`risk-${clause.clauseId}-${i}`}
                                 className="flex items-start gap-2.5 text-sm leading-relaxed text-muted-foreground"
                               >
                                 <span className="mt-2 block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-orange-400" />

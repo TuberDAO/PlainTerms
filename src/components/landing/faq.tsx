@@ -16,7 +16,7 @@ const FAQS = [
   },
   {
     q: "Do you store my documents?",
-    a: "No. Your contract text is processed in real-time and is not stored on our servers. We take your privacy seriously.",
+    a: "Your original document text is not kept after analysis. Only your report is saved to your account. We take your privacy seriously.",
   },
   {
     q: "What do I get for free?",

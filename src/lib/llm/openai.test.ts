@@ -26,8 +26,10 @@ import {
   estimateGroupTokenBudget,
   estimateSectionTokenBudget,
   classifyExtractionError,
+  SYSTEM_PROMPT,
   GROUP_SYNTHESIS_SYSTEM_PROMPT,
   VERDICT_SYNTHESIS_PROMPT,
+  isShortDocTimeoutRecoverable,
   type ChunkIssue,
   type SectionSummary,
 } from "./openai";
@@ -947,6 +949,38 @@ describe("isTransientTransportError", () => {
 });
 
 // ---------------------------------------------------------------------------
+// isShortDocTimeoutRecoverable
+// ---------------------------------------------------------------------------
+
+describe("isShortDocTimeoutRecoverable", () => {
+  it("returns true for AbortError", () => {
+    const err = new Error("Aborted");
+    err.name = "AbortError";
+    expect(isShortDocTimeoutRecoverable(err)).toBe(true);
+  });
+
+  it("returns true when the message mentions timed out", () => {
+    expect(
+      isShortDocTimeoutRecoverable(
+        new Error("Anthropic request timed out after 120000ms (stream=false)."),
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false for TRUNCATED_OUTPUT", () => {
+    const err = new Error("truncated");
+    (err as Record<string, unknown>).code = "TRUNCATED_OUTPUT";
+    expect(isShortDocTimeoutRecoverable(err)).toBe(false);
+  });
+
+  it("returns false for unrelated API errors", () => {
+    expect(isShortDocTimeoutRecoverable(new Error("invalid_api_key"))).toBe(
+      false,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Canonical inflation fix — boundary batches
 // ---------------------------------------------------------------------------
 
@@ -1323,6 +1357,113 @@ describe("runPerSectionSynthesis", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// SYSTEM_PROMPT — report-usability rules
+// ---------------------------------------------------------------------------
+
+describe("SYSTEM_PROMPT report-usability rules", () => {
+  it("includes contract-type-aware front-summary prioritisation", () => {
+    expect(SYSTEM_PROMPT).toContain("CONTRACT-TYPE FRONT-SUMMARY PRIORITISATION");
+    expect(SYSTEM_PROMPT).toContain("concern buckets");
+    expect(SYSTEM_PROMPT).toContain("Health insurance");
+    expect(SYSTEM_PROMPT).toContain("Home insurance");
+    expect(SYSTEM_PROMPT).toContain("Car / motor insurance");
+    expect(SYSTEM_PROMPT).toContain("Lease / tenancy");
+    expect(SYSTEM_PROMPT).toContain("Service / subscription / SaaS");
+    expect(SYSTEM_PROMPT).toContain("Employment / contractor");
+    expect(SYSTEM_PROMPT).toContain("Generic fallback");
+  });
+
+  it("includes standard-vs-unusual-vs-positive guidance", () => {
+    expect(SYSTEM_PROMPT).toContain("STANDARD vs UNUSUAL vs POSITIVE GUIDANCE");
+    expect(SYSTEM_PROMPT).toContain("Common or standard for this type");
+    expect(SYSTEM_PROMPT).toContain("Stricter than usual");
+    expect(SYSTEM_PROMPT).toContain("Genuine positive");
+    expect(SYSTEM_PROMPT).toContain("Possible deal-breaker");
+    expect(SYSTEM_PROMPT).toContain("overclaim market certainty");
+  });
+
+  it("includes dynamic framing by clause type with explicit categories", () => {
+    expect(SYSTEM_PROMPT).toContain("DYNAMIC FRAMING BY CLAUSE TYPE");
+    expect(SYSTEM_PROMPT).toContain("Clear exclusion");
+    expect(SYSTEM_PROMPT).toContain("Waiting period");
+    expect(SYSTEM_PROMPT).toContain("Numeric cap or limit");
+    expect(SYSTEM_PROMPT).toContain("Condition or requirement");
+    expect(SYSTEM_PROMPT).toContain("Ambiguous or misleading wording");
+    expect(SYSTEM_PROMPT).toContain("Discretionary power");
+    expect(SYSTEM_PROMPT).toContain("Legal or technical nuance");
+    expect(SYSTEM_PROMPT).toContain('Only use "catch" style framing');
+    expect(SYSTEM_PROMPT).toContain("plainer explanatory framing");
+    expect(SYSTEM_PROMPT).toContain("Do NOT force a naive assumption sentence");
+  });
+
+  it("restricts You would think to genuinely ambiguous wording", () => {
+    expect(SYSTEM_PROMPT).toContain('Do NOT start with "You would think..."');
+    expect(SYSTEM_PROMPT).toContain("genuinely plausible from ambiguous wording");
+    expect(SYSTEM_PROMPT).toContain("What this clause says");
+    expect(SYSTEM_PROMPT).toContain("What this means on a quick read");
+    expect(SYSTEM_PROMPT).toContain("What many people may miss");
+  });
+
+  it("uses explanatory framing for clear exclusions and caps in whatItMeans", () => {
+    expect(SYSTEM_PROMPT).toContain("What this means in practice");
+    expect(SYSTEM_PROMPT).toContain("Why this matters");
+    expect(SYSTEM_PROMPT).toContain("How this affects a claim");
+    expect(SYSTEM_PROMPT).toContain("Do NOT imply there is a hidden catch when the clause is already explicit");
+  });
+
+  it("includes technical term explanation rules with expanded term lists", () => {
+    expect(SYSTEM_PROMPT).toContain("EXPLAIN TECHNICAL AND LEGAL TERMS");
+    expect(SYSTEM_PROMPT).toContain("plain-English definition");
+    expect(SYSTEM_PROMPT).toContain("deductible");
+    expect(SYSTEM_PROMPT).toContain("subsidence");
+    expect(SYSTEM_PROMPT).toContain("indemnity");
+    expect(SYSTEM_PROMPT).toContain("occupiers' liability");
+    expect(SYSTEM_PROMPT).toContain("property owners' liability");
+    expect(SYSTEM_PROMPT).toContain("liability cap");
+    expect(SYSTEM_PROMPT).toContain("market value");
+    expect(SYSTEM_PROMPT).toContain("one short plain-English explanation of the term");
+  });
+
+  it("includes custom-context moderation rules to reduce overuse", () => {
+    expect(SYSTEM_PROMPT).toContain("CUSTOM CONTEXT MODERATION");
+    expect(SYSTEM_PROMPT).toContain("2 to 3 findings");
+    expect(SYSTEM_PROMPT).toContain("common real-world scenarios");
+    expect(SYSTEM_PROMPT).toContain("common everyday example");
+  });
+
+  it("includes positive and neutral balance guidance", () => {
+    expect(SYSTEM_PROMPT).toContain("POSITIVE AND NEUTRAL BALANCE");
+    expect(SYSTEM_PROMPT).toContain("Do NOT force fake balance");
+    expect(SYSTEM_PROMPT).toContain("honest balance");
+    expect(SYSTEM_PROMPT).toContain("broadly terrible");
+  });
+
+  it("includes schedule-aware certainty rules", () => {
+    expect(SYSTEM_PROMPT).toContain("SCHEDULE-AWARE CERTAINTY");
+    expect(SYSTEM_PROMPT).toContain("general wording booklet");
+    expect(SYSTEM_PROMPT).toContain("check your schedule to confirm");
+    expect(SYSTEM_PROMPT).toContain("personalised schedule or certificate");
+    expect(SYSTEM_PROMPT).toContain("err on the side of telling the buyer to confirm");
+  });
+
+  it("includes country-aware examples and currency formatting guidance", () => {
+    expect(SYSTEM_PROMPT).toContain("COUNTRY-AWARE EXAMPLES AND CURRENCY");
+    expect(SYSTEM_PROMPT).toContain("UK: use pounds");
+    expect(SYSTEM_PROMPT).toContain("US: use dollars");
+    expect(SYSTEM_PROMPT).toContain("CA: use Canadian dollars");
+    expect(SYSTEM_PROMPT).toContain("AU: use Australian dollars");
+    expect(SYSTEM_PROMPT).toContain("£3,000");
+    expect(SYSTEM_PROMPT).toContain("$5,000");
+    expect(SYSTEM_PROMPT).toContain("Do NOT use US-style medical cost examples in a UK home-insurance context");
+  });
+
+  it("instructs no em dashes or en dashes", () => {
+    expect(SYSTEM_PROMPT).toContain("PUNCTUATION");
+    expect(SYSTEM_PROMPT).toContain("Never use em dashes or en dashes");
+  });
+});
+
 describe("GROUP_SYNTHESIS_SYSTEM_PROMPT buyer-facing rules", () => {
   it("requires plain language at a 12-year-old reading level", () => {
     expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("12-year-old");
@@ -1360,6 +1501,70 @@ describe("GROUP_SYNTHESIS_SYSTEM_PROMPT buyer-facing rules", () => {
   it("still requires valid JSON output", () => {
     expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Output ONLY valid JSON");
   });
+
+  it("includes standard-vs-unusual-vs-positive guidance", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("STANDARD vs UNUSUAL vs POSITIVE");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("appears common");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("stricter than");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("stronger-than-average");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("overclaim market certainty");
+  });
+
+  it("includes dynamic framing by clause type", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("DYNAMIC FRAMING BY CLAUSE TYPE");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Clear exclusion, waiting period, numeric cap");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("explanatory framing");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("contrast framing");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain('Only use "catch" framing when the clause genuinely hides');
+  });
+
+  it("includes improved clause-card framing rules that avoid forced assumptions", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("most plausible quick reading");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Do NOT force a cartoonishly broad misunderstanding");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain('Do NOT start with "You would think..."');
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("What this clause says");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("What many people may miss");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("What many people may assume");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("assumption-vs-reality framing when the clause genuinely misleads");
+  });
+
+  it("uses explanatory framing for clear exclusions in whatItMeans", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("What this means in practice");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Why this matters");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("How this affects a claim");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Do NOT imply there is a hidden catch when the clause is already explicit");
+  });
+
+  it("includes schedule-aware certainty rules", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("SCHEDULE-AWARE CERTAINTY");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("general policy wording booklet");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("check your schedule to confirm");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Optional");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("If selected");
+  });
+
+  it("includes country-appropriate currency guidance in scenarios", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("country-appropriate currency symbols");
+  });
+
+  it("includes technical term explanation rules", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("TECHNICAL TERM EXPLANATION");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("plain-English definition");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("deductible");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("subsidence");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("occupiers' liability");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Do NOT just name the distinction");
+  });
+
+  it("includes custom-context moderation rules", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("MODERATION");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("2 to 3 findings");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("common real-world scenarios");
+  });
+
+  it("instructs no em dashes or en dashes in generated text", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Never use em dashes or en dashes");
+  });
 });
 
 describe("VERDICT_SYNTHESIS_PROMPT buyer-facing rules", () => {
@@ -1388,5 +1593,51 @@ describe("VERDICT_SYNTHESIS_PROMPT buyer-facing rules", () => {
 
   it("does not regenerate findings", () => {
     expect(VERDICT_SYNTHESIS_PROMPT).toContain("Do NOT regenerate findings");
+  });
+
+  it("includes contract-type-aware front-summary prioritisation", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("FRONT-SUMMARY PRIORITISATION");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("concern buckets");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Health insurance");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Home insurance");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Car insurance");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Lease");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Employment");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Generic");
+  });
+
+  it("includes standard-vs-unusual-vs-positive balance guidance", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("STANDARD vs UNUSUAL vs POSITIVE");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("genuine positives");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("common for contracts of this type");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("honest balance");
+  });
+
+  it("instructs personal context not to dominate front summary", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Do NOT let personal context dominate the front summary");
+  });
+
+  it("includes custom-context moderation rules", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("MODERATION");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Vary across the main concern areas");
+  });
+
+  it("includes schedule-aware certainty rules", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("SCHEDULE-AWARE CERTAINTY");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("optional or conditional sections");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("check their schedule or certificate");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("optional cover as definitely active");
+  });
+
+  it("includes country-aware examples and currency formatting", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("COUNTRY-AWARE EXAMPLES AND CURRENCY");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("country-appropriate currency symbols");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("£3,000");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("FOS");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("state insurance commissioner");
+  });
+
+  it("instructs no em dashes or en dashes in generated text", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("Never use em dashes or en dashes");
   });
 });

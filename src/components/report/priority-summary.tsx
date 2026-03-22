@@ -34,7 +34,7 @@ export function PrioritySummary({ findings }: PrioritySummaryProps) {
         Most important right now
       </p>
       <ul className="mt-3 space-y-2.5">
-        {items.map((finding) => {
+        {items.map((finding, pIdx) => {
           // Only show timing note when metadata is high-confidence and timing
           // adds information beyond the default "before-signing".
           const timingNote =
@@ -47,7 +47,7 @@ export function PrioritySummary({ findings }: PrioritySummaryProps) {
 
           return (
             <li
-              key={finding.id}
+              key={`priority-${pIdx}-${finding.id}`}
               className="flex items-start gap-2.5 text-sm leading-relaxed"
             >
               <span className="mt-1.5 block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-500" />
@@ -57,7 +57,7 @@ export function PrioritySummary({ findings }: PrioritySummaryProps) {
                 {timingNote && (
                   <span className="ml-1 text-[11px] font-medium uppercase tracking-wide text-amber-600">
                     {" "}
-                    — {timingNote}
+                    ({timingNote})
                   </span>
                 )}
               </span>

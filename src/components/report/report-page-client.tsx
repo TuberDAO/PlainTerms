@@ -7,13 +7,7 @@ import { PaywallBlock } from "@/components/report/paywall-block";
 import { ClauseCardFull } from "@/components/report/clause-card-full";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Download, Share2, AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, CheckCircle2 } from "lucide-react";
 import { UserQuestionAnswer } from "@/components/report/user-question-answer";
 import { PrioritySummary } from "@/components/report/priority-summary";
 import { CoverageStatusBlock } from "@/components/report/coverage-status";
@@ -23,11 +17,53 @@ import {
   PREVIEW_CLAUSE_CARDS_LIMIT,
 } from "@/lib/budget";
 import Link from "next/link";
-import type { Report } from "@/types/report";
+import type { Report, ClauseCard } from "@/types/report";
 import { rankFindings } from "@/lib/report/rank-findings";
 
 interface ReportPageClientProps {
   report: Report | null;
+}
+
+function clausesBySection(
+  clauses: ClauseCard[],
+  allIssuesBySection?: Report["allIssuesBySection"],
+): { sectionLabel: string; clauses: ClauseCard[] }[] {
+  if (!allIssuesBySection || allIssuesBySection.length === 0) {
+    return [{ sectionLabel: "", clauses }];
+  }
+
+  const clauseIdToSection = new Map<string, string>();
+  for (const sec of allIssuesBySection) {
+    for (const issue of sec.issues) {
+      for (const cid of issue.relatedClauseIds) {
+        if (!clauseIdToSection.has(cid)) {
+          clauseIdToSection.set(cid, sec.sectionLabel);
+        }
+      }
+    }
+  }
+
+  const sectionOrder = allIssuesBySection.map((s) => s.sectionLabel);
+  const grouped = new Map<string, ClauseCard[]>();
+  for (const label of sectionOrder) grouped.set(label, []);
+
+  const ungrouped: ClauseCard[] = [];
+  for (const clause of clauses) {
+    const sec = clauseIdToSection.get(clause.clauseId);
+    if (sec && grouped.has(sec)) {
+      grouped.get(sec)!.push(clause);
+    } else {
+      ungrouped.push(clause);
+    }
+  }
+
+  const result: { sectionLabel: string; clauses: ClauseCard[] }[] = [];
+  for (const label of sectionOrder) {
+    const items = grouped.get(label)!;
+    if (items.length > 0) result.push({ sectionLabel: label, clauses: items });
+  }
+  if (ungrouped.length > 0) result.push({ sectionLabel: "Other clauses", clauses: ungrouped });
+  return result;
 }
 
 export function ReportPageClient({ report }: ReportPageClientProps) {
@@ -37,8 +73,8 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
     }
   }, [report]);
 
-  const [clausesExpanded, setClausesExpanded] = useState(false);
-  const [sectionsExpanded, setSectionsExpanded] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [targetedLettersOpen, setTargetedLettersOpen] = useState(false);
 
   if (!report) {
     return (
@@ -58,11 +94,6 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
 
   const rankedFindings = rankFindings(report.findings);
   const hasTopIssues = !report.isPreview && Array.isArray(report.topIssues) && report.topIssues.length > 0;
-  const hasAllBySection = !report.isPreview && Array.isArray(report.allIssuesBySection) && report.allIssuesBySection.length > 0;
-  const totalSectionIssues = hasAllBySection
-    ? report.allIssuesBySection!.reduce((s, sec) => s + sec.issues.length, 0)
-    : 0;
-  const showSectionView = hasAllBySection && totalSectionIssues > (report.topIssues?.length ?? 0);
 
   const visibleFindings = report.isPreview
     ? rankedFindings.slice(0, PREVIEW_FINDINGS_LIMIT)
@@ -74,10 +105,25 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
     ? report.clauseCards.slice(0, PREVIEW_CLAUSE_CARDS_LIMIT)
     : report.clauseCards;
 
-  const hasActions = !report.isPreview && (
-    report.actions.recommendedQuestions.length > 0 ||
-    report.actions.letterTemplates.length > 0
-  );
+  const hasQuestions = !report.isPreview && report.actions.recommendedQuestions.length > 0;
+  const hasLetters = !report.isPreview && report.actions.letterTemplates.length > 0;
+  const hasActions = hasQuestions || hasLetters;
+
+  const combinedLetter = report.actions.letterTemplates.find((l) => l.id === "lt-combined");
+  const targetedLetters = report.actions.letterTemplates.filter((l) => l.id !== "lt-combined");
+
+  const sectionGroups = !report.isPreview
+    ? clausesBySection(visibleClauses, report.allIssuesBySection)
+    : [];
+
+  function toggleSection(label: string) {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
 
   return (
     <div className="py-10 md:py-16">
@@ -127,61 +173,45 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
           </div>
         )}
 
-        {/* Export buttons */}
-        <div className="mt-5 flex gap-2">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled
-                  className="gap-2 rounded-lg"
-                >
-                  <Download className="h-4 w-4" />
-                  Export PDF
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Coming soon</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled
-                  className="gap-2 rounded-lg"
-                >
-                  <Share2 className="h-4 w-4" />
-                  Share
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Coming soon</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
+        {/* Save status */}
+        {!report.isPreview && (
+          <div className="mt-5 flex items-center gap-2 text-sm text-muted-foreground" data-testid="save-status">
+            <CheckCircle2 className="h-4 w-4 text-green-600" />
+            <span>
+              Report saved.{" "}
+              <Link href="/account" className="font-medium text-primary hover:underline">
+                Sign in
+              </Link>{" "}
+              to keep it permanently.
+            </span>
+          </div>
+        )}
 
         {/* ═══════════════════════════════════════════════════════════
-            LAYER 2 — Action pack (before detailed reference)
+            LAYER 2 — Action pack
             ═══════════════════════════════════════════════════════════ */}
 
         {hasActions && (
-          <div className="mt-12 space-y-8" data-testid="action-pack">
-            <h2 className="text-lg font-semibold sm:text-xl">
-              What to do next
-            </h2>
+          <div className="mt-12 space-y-6" data-testid="action-pack">
+            <div>
+              <h2 className="text-lg font-semibold sm:text-xl">What to do next</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Practical steps you can take right now.
+              </p>
+            </div>
 
-            {report.actions.recommendedQuestions.length > 0 && (
+            {/* Questions */}
+            {hasQuestions && (
               <Card className="rounded-xl">
                 <CardContent className="p-6">
                   <h3 className="text-base font-semibold">Questions to ask</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    You can ask these directly — by phone, email, or in person.
+                  <p className="mt-1 text-sm text-muted-foreground" data-testid="questions-helper">
+                    Ask these in writing where possible, so you have a record. Use phone only if something is urgent.
                   </p>
                   <ul className="mt-4 space-y-2.5">
                     {report.actions.recommendedQuestions.map((q, i) => (
                       <li
-                        key={i}
+                        key={`q-${i}-${q.slice(0, 20)}`}
                         className="flex items-start gap-2.5 text-sm leading-relaxed text-muted-foreground"
                       >
                         <span className="mt-2 block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
@@ -193,72 +223,129 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
               </Card>
             )}
 
-            {report.actions.letterTemplates.length > 0 && (
-              <>
-                <div>
-                  <h3 className="text-base font-semibold">Ready-to-send letters</h3>
+            {/* Combined letter — shown first and expanded */}
+            {combinedLetter && (
+              <Card className="rounded-xl border-primary/20" data-testid="combined-letter">
+                <CardContent className="p-6">
+                  <h3 className="text-base font-semibold">{combinedLetter.title}</h3>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Use these to put your concerns in writing.
-                    {report.actions.letterTemplates.length > 1 && (
-                      <> You can send a targeted letter about one issue, or use the combined letter to cover everything at once.</>
-                    )}
+                    Covers all the main concerns in one message. Copy, personalise, and send.
                   </p>
-                </div>
+                  <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-muted/30 p-5 text-xs leading-relaxed text-muted-foreground sm:text-sm">
+                    {combinedLetter.body}
+                  </pre>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Targeted letters — collapsed behind disclosure */}
+            {targetedLetters.length > 0 && (
+              <div data-testid="targeted-letters">
+                <button
+                  onClick={() => setTargetedLettersOpen(!targetedLettersOpen)}
+                  className="flex items-center gap-2 text-sm font-medium text-primary transition-colors hover:text-primary/80"
+                >
+                  {targetedLettersOpen ? (
+                    <ChevronDown className="h-4 w-4" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4" />
+                  )}
+                  {targetedLetters.length} targeted letter{targetedLetters.length !== 1 ? "s" : ""} for specific issues
+                </button>
+                {targetedLettersOpen && (
+                  <div className="mt-4 space-y-4">
+                    {targetedLetters.map((letter) => (
+                      <Card key={`letter-${letter.id}`} className="rounded-xl">
+                        <CardContent className="p-6">
+                          <h4 className="text-sm font-semibold sm:text-base">
+                            {letter.title}
+                          </h4>
+                          <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-muted/30 p-5 text-xs leading-relaxed text-muted-foreground sm:text-sm">
+                            {letter.body}
+                          </pre>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Fallback: if there's no combined letter, show all letters flat */}
+            {!combinedLetter && hasLetters && targetedLetters.length === 0 && (
+              <div className="space-y-4">
                 {report.actions.letterTemplates.map((letter) => (
-                  <Card key={letter.id} className="rounded-xl">
+                  <Card key={`letter-${letter.id}`} className="rounded-xl">
                     <CardContent className="p-6">
-                      <h4 className="text-sm font-semibold sm:text-base">
-                        {letter.title}
-                      </h4>
+                      <h4 className="text-sm font-semibold sm:text-base">{letter.title}</h4>
                       <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-muted/30 p-5 text-xs leading-relaxed text-muted-foreground sm:text-sm">
                         {letter.body}
                       </pre>
                     </CardContent>
                   </Card>
                 ))}
-              </>
+              </div>
             )}
           </div>
         )}
 
         {/* ═══════════════════════════════════════════════════════════
-            LAYER 3 — Detailed reference (clause cards + full sections)
+            LAYER 3 — Detailed reference (single entry point)
             ═══════════════════════════════════════════════════════════ */}
 
-        {!report.isPreview && (
+        {!report.isPreview && visibleClauses.length > 0 && (
           <div className="mt-16 border-t pt-10" data-testid="detailed-reference">
             <h2 className="text-lg font-semibold sm:text-xl">
-              Detailed clause reference
+              Detailed reference
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Full clause-by-clause breakdown. Use this to understand exactly what each clause says and means.
+              Full clause-by-clause breakdown, grouped by section. Use this to understand exactly what each clause says and means.
             </p>
 
-            {/* Clause cards — collapsed by default for large reports */}
-            {visibleClauses.length > 0 && (
-              <div className="mt-8">
-                {visibleClauses.length > 4 && !clausesExpanded ? (
-                  <>
-                    <div className="space-y-6">
-                      {visibleClauses.slice(0, 3).map((clause) => (
-                        <ClauseCardFull key={clause.clauseId} clause={clause} startCollapsed />
-                      ))}
+            {sectionGroups.length > 1 ? (
+              <div className="mt-8 space-y-6">
+                {sectionGroups.map((group) => {
+                  const isOpen = expandedSections.has(group.sectionLabel);
+                  return (
+                    <div key={`sec-${group.sectionLabel}`}>
+                      <button
+                        onClick={() => toggleSection(group.sectionLabel)}
+                        className="flex w-full items-center gap-2 rounded-lg px-1 py-2 text-left text-sm font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        {isOpen ? (
+                          <ChevronDown className="h-4 w-4 flex-shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 flex-shrink-0" />
+                        )}
+                        {group.sectionLabel}
+                        <span className="ml-auto text-xs font-normal">
+                          {group.clauses.length} clause{group.clauses.length !== 1 ? "s" : ""}
+                        </span>
+                      </button>
+                      {isOpen && (
+                        <div className="mt-3 space-y-5 pl-1">
+                          {group.clauses.map((clause, idx) => (
+                            <ClauseCardFull
+                              key={`ref-${group.sectionLabel}-${idx}-${clause.clauseId}`}
+                              clause={clause}
+                              startCollapsed
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <button
-                      onClick={() => setClausesExpanded(true)}
-                      className="mt-4 flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/5"
-                    >
-                      <ChevronDown className="h-4 w-4" />
-                      Show all {visibleClauses.length} clause breakdowns
-                    </button>
-                  </>
-                ) : (
-                  <div className="space-y-6">
-                    {visibleClauses.map((clause) => (
-                      <ClauseCardFull key={clause.clauseId} clause={clause} startCollapsed />
-                    ))}
-                  </div>
-                )}
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="mt-8 space-y-5">
+                {visibleClauses.map((clause, idx) => (
+                  <ClauseCardFull
+                    key={`ref-${idx}-${clause.clauseId}`}
+                    clause={clause}
+                    startCollapsed
+                  />
+                ))}
               </div>
             )}
           </div>
@@ -272,7 +359,7 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
             </h2>
             <div className="mt-6 space-y-6">
               {visibleClauses.map((clause) => (
-                <ClauseCardFull key={clause.clauseId} clause={clause} />
+                <ClauseCardFull key={`preview-${clause.clauseId}`} clause={clause} />
               ))}
             </div>
           </div>
@@ -282,42 +369,10 @@ export function ReportPageClient({ report }: ReportPageClientProps) {
           report.clauseCards.length > PREVIEW_CLAUSE_CARDS_LIMIT && (
             <div className="mt-6">
               <PaywallBlock
-                count={
-                  report.clauseCards.length - PREVIEW_CLAUSE_CARDS_LIMIT
-                }
+                count={report.clauseCards.length - PREVIEW_CLAUSE_CARDS_LIMIT}
               />
             </div>
           )}
-
-        {/* All findings by section — collapsible reference */}
-        {showSectionView && (
-          <div className="mt-12">
-            <button
-              onClick={() => setSectionsExpanded(!sectionsExpanded)}
-              className="flex items-center gap-2 text-lg font-semibold sm:text-xl"
-            >
-              {sectionsExpanded ? (
-                <ChevronDown className="h-5 w-5 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="h-5 w-5 text-muted-foreground" />
-              )}
-              All findings by section
-            </button>
-            <p className="mt-1 ml-7 text-sm text-muted-foreground">
-              Complete issue coverage across {report.allIssuesBySection!.length}{" "}
-              section{report.allIssuesBySection!.length !== 1 ? "s" : ""} ({totalSectionIssues}{" "}
-              total)
-            </p>
-            {sectionsExpanded && report.allIssuesBySection!.map((section) => (
-              <div key={section.sectionLabel} className="mt-6">
-                <h3 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                  {section.sectionLabel}
-                </h3>
-                <FindingsList findings={section.issues} />
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
