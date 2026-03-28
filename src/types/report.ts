@@ -43,8 +43,11 @@ export interface CrossClauseCombo {
   whatToDo: string[];
 }
 
+export type ClauseFraming = "explanatory" | "contrast" | "technical";
+
 export interface ClauseCard {
   clauseId: string;
+  clauseFraming?: ClauseFraming;
   clauseLabel: string;
   originalTextExcerpt: string;
   atFirstGlance: string;

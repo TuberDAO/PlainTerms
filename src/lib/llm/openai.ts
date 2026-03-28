@@ -174,11 +174,20 @@ QUALITY REQUIREMENTS:
    e) Ambiguous or misleading wording (e.g. "reasonable" without definition): contrast the surface reading with the real meaning. This is where "catch" framing is appropriate.
    f) Discretionary power (e.g. "We may decide at our sole discretion"): explain the breadth of power and what that means in practice.
    g) Legal or technical nuance (e.g. indemnity basis, subrogation): explain the term plainly and say why it matters.
+   h) Optional-section or schedule-dependent cover (e.g. "If shown on your schedule"): explain what the section covers, but make clear the buyer must check their schedule to confirm it is active.
+
+   clauseFraming — every clause card MUST include a "clauseFraming" field:
+   - "explanatory" — for categories a, b, c, d, h. Straightforward clauses that do not hide the sting.
+   - "contrast" — for categories e, f. Clauses that genuinely hide, soften, or obscure the real impact.
+   - "technical" — for category g. Legal or technical terms that need plain-English explanation.
 
    Rules:
    - Only use "catch" style framing (surface reading vs hidden sting) when the clause genuinely hides or softens the sting.
    - For clear exclusions, waiting periods, caps, and hard requirements, use plainer explanatory framing.
    - Do NOT force a naive assumption sentence when the clause is already explicit.
+   - Do not use trap-like or catch framing for clear exclusions, waiting periods, obvious numeric limits, or straightforward conditions.
+   - For those, use calm explanatory framing such as "What this clause says", "What this means in practice", "Why this matters", "How this affects a claim".
+   - Reserve stronger contrast framing only for clauses that genuinely hide, soften, or obscure the sting.
 
    atFirstGlance:
    - Write the most plausible quick reading a normal buyer would take from this clause. Friendly tone.
@@ -190,6 +199,11 @@ QUALITY REQUIREMENTS:
      * For easy-to-miss detail: "What many people may miss", "What this may sound like"
      * For ambiguous wording: "What many people may assume", "What this looks like at first"
    - Only use an assumption-vs-reality style when the clause genuinely misleads.
+   - Do NOT invent a broad misunderstanding that a normal customer would not actually have. Examples of what to avoid:
+     * If the clause clearly says no cover in the first 14 days, do not pretend the customer would naturally think cover starts immediately.
+     * If the clause clearly says no cover after 3 claims, do not pretend the customer would assume unlimited claims.
+     * If the clause clearly excludes planned tree-work damage, do not turn that into "you would think any tree damage is covered."
+   - For explicit clauses, describe what the clause actually says, plainly and narrowly.
 
    whatItMeans:
    - For genuinely trap-like or ambiguous clauses: explain the catch, the real practical impact. Focus on consequences the reader would not have expected.
@@ -199,6 +213,13 @@ QUALITY REQUIREMENTS:
 3. REALISTIC SCENARIOS
    Each scenario must be a specific, plausible "how you get burned" story with concrete details (amounts, timeframes, specific situations).
    Bad: "You might face consequences." Good: "You cancel on March 5th, but the 60-day notice window already passed on February 1st. You owe the full annual renewal of £2,400."
+   Scenario realism rules:
+   - Examples must be realistic and must match the clause being discussed.
+   - Examples must match the country when the locale is known. UK home-insurance examples should use UK consequences (compensation exposure, legal costs, rehab costs, lost earnings), not US-style medical-bill logic.
+   - Examples must match the actual user context without overreaching beyond what was stated.
+   - Do not rely on improbable mechanics just to make the clause sound dramatic.
+   - Avoid weak examples like implausible stranger, tenant, or lodger crossover scenarios unless directly supported by the facts given.
+   - Any scenario example used anywhere in the report must be grounded in the clause, grounded in the known facts, appropriate to the country, and not overstated in certainty.
 
 4. TIME-AWARE, DECISION-USEFUL NEXT STEPS
    whatToDo items must help the reader decide and act — not just understand.
@@ -228,6 +249,25 @@ QUALITY REQUIREMENTS:
    - Mix in common real-world scenarios for the contract type alongside personal-context scenarios.
    - Vary examples across the main concern buckets relevant to the contract type.
    - If a scenario can be made vivid with a common everyday example instead of the same custom fact, prefer the common example.
+
+   CONTEXT-ENTITY ACCURACY:
+   Do NOT upgrade vague user context into a more specific legal or factual relationship unless directly stated.
+   - "shared hallway with another flat" does not mean the user is a tenant, lodger, or paying guest.
+   - "upstairs flat" does not mean lodger.
+   - "separate neighbour" does not mean paying guest.
+   - "old house" does not mean proven subsidence.
+   - "one health condition" does not mean every scenario must use that condition.
+   Use only the facts actually given. If the relationship or circumstance is uncertain, say so cautiously. Do not turn contextual hints into asserted facts.
+
+   CROSS-SECTION CONTRADICTION CONTROL:
+   When producing multiple findings, check whether two findings that look related are actually about different coverage layers, sections, or add-ons. The report must not sound self-contradictory when the findings are actually about:
+   - wording booklet vs confirmed schedule cover
+   - building cover vs contents cover
+   - core policy vs optional add-on
+   - claim payment vs legal-expenses help
+   - emergency assistance section vs main indemnity section
+   - general definition vs section-specific exclusion
+   If two findings discuss the same object or situation (e.g. shed, hallway, boiler, tree, bike, theft, burst pipe, legal cover), clarify whether they refer to different sections or different types of protection rather than sounding contradictory.
 
 7. EXPLAIN TECHNICAL AND LEGAL TERMS
    When a clause uses an important technical, financial, or legal term that a normal buyer may not know:
@@ -276,15 +316,24 @@ QUALITY REQUIREMENTS:
     Where legal uncertainty matters, say so briefly and explain what the consumer should do next.
     Do not use legal jargon unless quoting the document. If you quote jargon, immediately explain it.
 
-15. PUNCTUATION
+15. PUNCTUATION AND STYLE
     Never use em dashes or en dashes in user-facing text. Use full stops, commas, brackets, or simpler sentence splits instead.
+    Do not use dash-heavy sentence fragments or dramatic dash-separated phrasing such as:
+    - "Bad - weak theft cover"
+    - "Good - standard storm cover"
+    - "The risk - claim may fail"
+    Use full sentences, bullets, commas, or brackets instead.
 
 16. SCHEDULE-AWARE CERTAINTY
     Many insurance policy wording documents include optional sections that only apply if the buyer selected that cover level or add-on. If the uploaded document appears to be a general wording booklet (not a personalised schedule), do not present optional or conditional sections as definitely active.
     - If a section heading says "Optional", "If selected", "Where shown on your schedule", or similar, the report must flag this uncertainty.
     - Preferred wording: "This section appears in the policy wording, but check your schedule to confirm it is included in your cover."
+    - Alternative: "This only matters if this part of the cover was selected."
+    - Alternative: "The wording booklet includes this section, but your schedule confirms whether it is active."
     - If the document clearly is a personalised schedule or certificate, you can be more definite.
     - When uncertain, always err on the side of telling the buyer to confirm.
+    - Do not bury the schedule caveat in a tiny note only. If activation depends on the schedule, include the caveat prominently where it materially affects the conclusion.
+    - In findings, clause cards, and the verdict, keep the schedule uncertainty visible whenever it applies.
 
 17. COUNTRY-AWARE EXAMPLES AND CURRENCY
     When the locale or jurisdiction is known, make sure scenarios, examples, and currency symbols fit that country.
@@ -337,10 +386,11 @@ OUTPUT SCHEMA — return a JSON object with exactly these fields:
   "clauseCards": [
     {
       "clauseId": "<unique id like c-1, c-2>",
+      "clauseFraming": "<explanatory|contrast|technical — see DYNAMIC FRAMING BY CLAUSE TYPE rules above>",
       "clauseLabel": "<short clause name>",
       "originalTextExcerpt": "<actual quote from the document text — must exist in the provided chunks>",
-      "atFirstGlance": "<what a reasonable person casually assumes — friendly tone>",
-      "whatItMeans": "<the catch / real practical impact — direct and specific>",
+      "atFirstGlance": "<for explanatory: plain paraphrase of clause; for contrast: plausible surface assumption; for technical: plain-English meaning — friendly tone>",
+      "whatItMeans": "<for explanatory: practical impact; for contrast: the catch / hidden sting; for technical: why it matters — direct and specific>",
       "scenario": "<concrete 'how you get burned' story with specific details>",
       "whatToDo": ["<time-aware actionable steps: before signing / before renewal / if something goes wrong / ongoing>"],
       "goDeeper": "<optional deeper explanation — keep plain and practical>",
@@ -635,11 +685,15 @@ function patchReportDefaults(raw: string): string {
         }
       }
     }
+    const validFramingsSet = new Set(["explanatory", "contrast", "technical"]);
     if (Array.isArray(obj.clauseCards)) {
       for (let i = 0; i < obj.clauseCards.length; i++) {
         const c = obj.clauseCards[i];
         if (!c.clauseId) c.clauseId = `c-${i + 1}`;
         if (!Array.isArray(c.whatToDo)) c.whatToDo = [];
+        if (c.clauseFraming && !validFramingsSet.has(c.clauseFraming)) {
+          delete c.clauseFraming;
+        }
       }
     }
 
@@ -2255,9 +2309,18 @@ PLAIN-LANGUAGE RULES (critical for every prose field):
 DYNAMIC FRAMING BY CLAUSE TYPE:
 Not every clause deserves "catch" framing. Match the style to the clause:
 - Clear exclusion, waiting period, numeric cap, or hard requirement: use explanatory framing. State what the clause says and explain why it matters. No fake surprise.
+- Optional-section or schedule-dependent cover: explain what the section covers, but make clear the buyer must check their schedule to confirm it is active.
 - Ambiguous or misleading wording, discretionary power, or hidden sting: use contrast framing (surface reading vs real meaning). This is where "catch" style is appropriate.
 - Legal or technical nuance: explain the term plainly and say why it matters.
 Only use "catch" framing when the clause genuinely hides or softens the sting.
+Do not use trap-like or catch framing for clear exclusions, waiting periods, obvious numeric limits, or straightforward conditions.
+For those, use calm explanatory framing such as "What this clause says", "What this means in practice", "Why this matters", "How this affects a claim".
+Reserve stronger contrast framing only for clauses that genuinely hide, soften, or obscure the sting.
+
+clauseFraming — every clause card MUST include a "clauseFraming" field:
+- "explanatory" — for clear exclusions, waiting periods, caps, conditions, optional-section cover. Straightforward clauses.
+- "contrast" — for ambiguous or misleading wording, discretionary power. Clauses that genuinely hide the sting.
+- "technical" — for legal or technical nuance that needs plain-English explanation.
 
 CLAUSE CARD PROSE RULES:
 - atFirstGlance: Write the most plausible quick reading a normal buyer would take. Friendly tone. One sentence.
@@ -2268,6 +2331,10 @@ CLAUSE CARD PROSE RULES:
   * For easy-to-miss detail prefer: "What many people may miss".
   * For ambiguous wording prefer: "What many people may assume", "What this may sound like".
   * Only use assumption-vs-reality framing when the clause genuinely misleads.
+  * Do NOT invent a broad misunderstanding a normal customer would not actually have. For example:
+    - If the clause clearly says no cover in the first 14 days, do not pretend the customer would assume cover starts immediately.
+    - If the clause clearly excludes planned tree-work damage, do not turn that into "you would think any tree damage is covered."
+  * For explicit clauses, describe what the clause actually says, plainly and narrowly.
 - whatItMeans: One to two sentences, direct and specific.
   * For genuinely trap-like clauses: explain the catch and the real practical impact.
   * For clear exclusions, caps, and hard rules: use explanatory framing. "What this means in practice", "Why this matters", "How this affects a claim". Do NOT imply there is a hidden catch when the clause is already explicit.
@@ -2284,6 +2351,9 @@ SCHEDULE-AWARE CERTAINTY:
 - If the document appears to be a general policy wording booklet rather than a personalised schedule, do not present optional or conditional sections as definitely active.
 - If a section heading says "Optional", "If selected", "Where shown on your schedule", or similar, flag this uncertainty clearly.
 - Preferred wording: "This section appears in the policy wording, but check your schedule to confirm it is included in your cover."
+- Alternative: "This only matters if this part of the cover was selected."
+- Alternative: "The wording booklet includes this section, but your schedule confirms whether it is active."
+- Do not bury the schedule caveat in a tiny note only. Include it prominently where it materially affects the conclusion.
 
 STANDARD vs UNUSUAL vs POSITIVE:
 - Clearly distinguish how normal or unusual each finding is for contracts of this type.
@@ -2314,6 +2384,27 @@ PERSONAL CONTEXT:
 - Use it naturally, only where it genuinely changes urgency or recommended action.
 - MODERATION: Do NOT reuse the same personal fact in more than 2 to 3 findings unless it is genuinely central. Mix in common real-world scenarios for the contract type as well.
 
+CONTEXT-ENTITY ACCURACY:
+- Do NOT upgrade vague user context into a more specific legal or factual relationship unless directly stated.
+- "shared hallway with another flat" does not mean the user is a tenant, lodger, or paying guest.
+- "upstairs flat" does not mean lodger. "old house" does not mean proven subsidence.
+- Use only the facts actually given. If the relationship or circumstance is uncertain, say so cautiously. Do not turn contextual hints into asserted facts.
+
+CROSS-SECTION CONTRADICTION CONTROL:
+- When producing findings, check whether two findings that look related are actually about different coverage layers, sections, or add-ons.
+- Distinguish: wording booklet vs confirmed schedule, building cover vs contents cover, core policy vs optional add-on, claim payment vs legal-expenses help, emergency assistance vs main indemnity, general definition vs section-specific exclusion.
+- If two findings discuss the same object (e.g. shed, hallway, boiler, tree, bike, theft, burst pipe, legal cover), clarify whether they refer to different sections or different types of protection rather than sounding contradictory.
+
+SCENARIO REALISM:
+- Examples must be realistic and must match the clause, country, and known user context without overreaching.
+- UK home-insurance examples should use UK consequences (compensation exposure, legal costs, rehab costs, lost earnings), not US-style medical-bill logic.
+- Do not rely on improbable mechanics just to make the clause sound dramatic.
+- Avoid weak examples like implausible stranger, tenant, or lodger crossover scenarios unless directly supported.
+
+DASH-FREE STYLE:
+- Do not use dash-heavy sentence fragments or dramatic dash-separated phrasing (e.g. "Bad - weak theft cover" or "The risk - claim may fail").
+- Use full sentences, bullets, commas, or brackets instead.
+
 OUTPUT SCHEMA (return a JSON object with exactly these fields):
 {
   "findings": [
@@ -2335,10 +2426,11 @@ OUTPUT SCHEMA (return a JSON object with exactly these fields):
   "clauseCards": [
     {
       "clauseId": "<unique id like c-1>",
+      "clauseFraming": "<explanatory|contrast|technical — see clauseFraming rules above>",
       "clauseLabel": "<short clause name>",
       "originalTextExcerpt": "<brief quote from excerpts, max 2 sentences>",
-      "atFirstGlance": "<most plausible surface reading, 1 sentence, friendly tone>",
-      "whatItMeans": "<the catch or real practical impact, 1-2 sentences, direct>",
+      "atFirstGlance": "<for explanatory: plain paraphrase; for contrast: plausible surface assumption; for technical: plain-English meaning>",
+      "whatItMeans": "<for explanatory: practical impact; for contrast: the catch; for technical: why it matters>",
       "scenario": "<concrete story with specific details, 1-2 sentences>",
       "whatToDo": ["<time-aware actionable steps, 2-3 items>"],
       "goDeeper": "<1 sentence or empty string>"
@@ -2461,8 +2553,10 @@ function parseGroupSynthOutput(
   if (Array.isArray(parsed.clauseCards)) {
     for (let i = 0; i < parsed.clauseCards.length; i++) {
       const c = parsed.clauseCards[i];
+      const validFramings = new Set(["explanatory", "contrast", "technical"]);
       clauseCards.push({
         clauseId: c.clauseId || `c-${sectionLabel}-g${groupIndex}-${i + 1}`,
+        clauseFraming: validFramings.has(c.clauseFraming) ? c.clauseFraming : undefined,
         clauseLabel: c.clauseLabel ?? "",
         originalTextExcerpt: c.originalTextExcerpt ?? "",
         atFirstGlance: c.atFirstGlance ?? "",
@@ -2731,6 +2825,8 @@ PERSONAL CONTEXT:
 SCHEDULE-AWARE CERTAINTY:
 - If any findings flagged optional or conditional sections that depend on the buyer's schedule, the verdict should remind the buyer to check their schedule or certificate.
 - Do not present optional cover as definitely active unless the uploaded document confirms it.
+- If schedule uncertainty is present, keep it visible in the verdict summary, not buried in a footnote.
+- Preferred: "Some findings relate to sections that may be optional. Check your schedule to confirm they are included."
 
 COUNTRY-AWARE EXAMPLES AND CURRENCY:
 - When the locale is known, use country-appropriate currency symbols and institutions in the verdict and recommended questions.
@@ -2741,6 +2837,18 @@ LEGALLY QUALIFIED CLAUSES:
 - Where findings note legal uncertainty, the verdict should reflect that honestly.
 - Do not overstate the harshest reading as guaranteed fact.
 - Suggest the buyer get written clarification where it matters.
+
+CROSS-SECTION CONTRADICTION CONTROL:
+- If findings from different sections appear to contradict each other, the verdict should clarify the distinction (e.g. building cover vs contents cover, core policy vs optional add-on, emergency assistance vs main indemnity).
+- Do not let the verdict sound self-contradictory when the underlying findings are about different layers of cover.
+
+SCENARIO AND EXAMPLE REALISM:
+- Any examples in the verdict or recommended questions must be realistic, country-appropriate, and grounded in actual findings.
+- Do not use US-style examples in UK contexts or vice versa.
+
+DASH-FREE STYLE:
+- Do not use dash-heavy sentence fragments or dramatic dash-separated phrasing.
+- Use full sentences, bullets, commas, or brackets instead.
 
 Output ONLY valid JSON with these fields:
 {

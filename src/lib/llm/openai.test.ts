@@ -1640,4 +1640,229 @@ describe("VERDICT_SYNTHESIS_PROMPT buyer-facing rules", () => {
   it("instructs no em dashes or en dashes in generated text", () => {
     expect(VERDICT_SYNTHESIS_PROMPT).toContain("Never use em dashes or en dashes");
   });
+
+  it("includes cross-section contradiction control", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("CROSS-SECTION CONTRADICTION CONTROL");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("building cover vs contents cover");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("core policy vs optional add-on");
+  });
+
+  it("includes scenario and example realism rules", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("SCENARIO AND EXAMPLE REALISM");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("country-appropriate");
+  });
+
+  it("includes dash-free style rules", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("DASH-FREE STYLE");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("dash-heavy sentence fragments");
+  });
+
+  it("includes expanded schedule-aware certainty with prominent caveat rule", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("schedule uncertainty is present");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("not buried in a footnote");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Clause-type framing control — all three prompts
+// ---------------------------------------------------------------------------
+
+describe("Clause-type framing control", () => {
+  it("SYSTEM_PROMPT requires clauseFraming field on every clause card", () => {
+    expect(SYSTEM_PROMPT).toContain('clauseFraming');
+    expect(SYSTEM_PROMPT).toContain('"explanatory"');
+    expect(SYSTEM_PROMPT).toContain('"contrast"');
+    expect(SYSTEM_PROMPT).toContain('"technical"');
+  });
+
+  it("SYSTEM_PROMPT adds optional-section category (h)", () => {
+    expect(SYSTEM_PROMPT).toContain("h) Optional-section or schedule-dependent cover");
+  });
+
+  it("SYSTEM_PROMPT forbids trap framing for straightforward clauses", () => {
+    expect(SYSTEM_PROMPT).toContain("Do not use trap-like or catch framing for clear exclusions");
+    expect(SYSTEM_PROMPT).toContain("calm explanatory framing");
+  });
+
+  it("GROUP_SYNTHESIS_SYSTEM_PROMPT requires clauseFraming field", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain('clauseFraming');
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain('"explanatory"');
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain('"contrast"');
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain('"technical"');
+  });
+
+  it("GROUP_SYNTHESIS_SYSTEM_PROMPT forbids trap framing for straightforward clauses", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Do not use trap-like or catch framing");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("calm explanatory framing");
+  });
+
+  it("clauseFraming field appears in both output schemas", () => {
+    expect(SYSTEM_PROMPT).toContain('"clauseFraming": "<explanatory|contrast|technical');
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain('"clauseFraming": "<explanatory|contrast|technical');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reduced misuse of "You would think..."
+// ---------------------------------------------------------------------------
+
+describe("First-box wording tightening", () => {
+  it("SYSTEM_PROMPT has explicit anti-examples for invented misreadings", () => {
+    expect(SYSTEM_PROMPT).toContain("no cover in the first 14 days");
+    expect(SYSTEM_PROMPT).toContain("no cover after 3 claims");
+    expect(SYSTEM_PROMPT).toContain("planned tree-work damage");
+    expect(SYSTEM_PROMPT).toContain("describe what the clause actually says, plainly and narrowly");
+  });
+
+  it("GROUP_SYNTHESIS has anti-examples for invented misreadings", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("no cover in the first 14 days");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("planned tree-work damage");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("describe what the clause actually says, plainly and narrowly");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Context-entity accuracy rules
+// ---------------------------------------------------------------------------
+
+describe("Context-entity accuracy", () => {
+  it("SYSTEM_PROMPT prevents upgrading vague context into specific relationships", () => {
+    expect(SYSTEM_PROMPT).toContain("CONTEXT-ENTITY ACCURACY");
+    expect(SYSTEM_PROMPT).toContain("shared hallway with another flat");
+    expect(SYSTEM_PROMPT).toContain("does not mean the user is a tenant, lodger, or paying guest");
+    expect(SYSTEM_PROMPT).toContain("old house");
+    expect(SYSTEM_PROMPT).toContain("does not mean proven subsidence");
+    expect(SYSTEM_PROMPT).toContain("Do not turn contextual hints into asserted facts");
+  });
+
+  it("GROUP_SYNTHESIS_SYSTEM_PROMPT prevents upgrading vague context", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("CONTEXT-ENTITY ACCURACY");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("shared hallway with another flat");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("tenant, lodger, or paying guest");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-section contradiction control
+// ---------------------------------------------------------------------------
+
+describe("Cross-section contradiction control", () => {
+  it("SYSTEM_PROMPT includes contradiction control rules", () => {
+    expect(SYSTEM_PROMPT).toContain("CROSS-SECTION CONTRADICTION CONTROL");
+    expect(SYSTEM_PROMPT).toContain("wording booklet vs confirmed schedule cover");
+    expect(SYSTEM_PROMPT).toContain("building cover vs contents cover");
+    expect(SYSTEM_PROMPT).toContain("core policy vs optional add-on");
+    expect(SYSTEM_PROMPT).toContain("claim payment vs legal-expenses help");
+    expect(SYSTEM_PROMPT).toContain("emergency assistance section vs main indemnity section");
+    expect(SYSTEM_PROMPT).toContain("general definition vs section-specific exclusion");
+    expect(SYSTEM_PROMPT).toContain("sounding contradictory");
+  });
+
+  it("GROUP_SYNTHESIS_SYSTEM_PROMPT includes contradiction control", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("CROSS-SECTION CONTRADICTION CONTROL");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("building cover vs contents cover");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("core policy vs optional add-on");
+  });
+
+  it("VERDICT_SYNTHESIS_PROMPT includes contradiction control", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("CROSS-SECTION CONTRADICTION CONTROL");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("building cover vs contents cover");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario realism and country fit
+// ---------------------------------------------------------------------------
+
+describe("Scenario realism and country fit", () => {
+  it("SYSTEM_PROMPT includes scenario realism filter rules", () => {
+    expect(SYSTEM_PROMPT).toContain("Scenario realism rules");
+    expect(SYSTEM_PROMPT).toContain("UK home-insurance examples should use UK consequences");
+    expect(SYSTEM_PROMPT).toContain("not US-style medical-bill logic");
+    expect(SYSTEM_PROMPT).toContain("improbable mechanics");
+    expect(SYSTEM_PROMPT).toContain("implausible stranger, tenant, or lodger crossover");
+    expect(SYSTEM_PROMPT).toContain("not overstated in certainty");
+  });
+
+  it("GROUP_SYNTHESIS_SYSTEM_PROMPT includes scenario realism", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("SCENARIO REALISM");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("UK home-insurance examples");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("not US-style medical-bill logic");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("improbable mechanics");
+  });
+
+  it("VERDICT_SYNTHESIS_PROMPT includes scenario realism", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("SCENARIO AND EXAMPLE REALISM");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("country-appropriate");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Schedule-aware certainty hardening
+// ---------------------------------------------------------------------------
+
+describe("Schedule-aware certainty hardening", () => {
+  it("SYSTEM_PROMPT includes expanded schedule-aware wording alternatives", () => {
+    expect(SYSTEM_PROMPT).toContain("This only matters if this part of the cover was selected");
+    expect(SYSTEM_PROMPT).toContain("The wording booklet includes this section, but your schedule confirms whether it is active");
+    expect(SYSTEM_PROMPT).toContain("Do not bury the schedule caveat in a tiny note only");
+    expect(SYSTEM_PROMPT).toContain("keep the schedule uncertainty visible");
+  });
+
+  it("GROUP_SYNTHESIS_SYSTEM_PROMPT includes expanded schedule alternatives", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("This only matters if this part of the cover was selected");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("Do not bury the schedule caveat");
+  });
+
+  it("VERDICT_SYNTHESIS_PROMPT includes prominent caveat rule", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("schedule uncertainty is present");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("not buried in a footnote");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// No dash-heavy fragment style
+// ---------------------------------------------------------------------------
+
+describe("Dash-heavy fragment style prohibition", () => {
+  it("SYSTEM_PROMPT prohibits dash-heavy fragments with examples", () => {
+    expect(SYSTEM_PROMPT).toContain("PUNCTUATION AND STYLE");
+    expect(SYSTEM_PROMPT).toContain("dash-heavy sentence fragments");
+    expect(SYSTEM_PROMPT).toContain("Bad - weak theft cover");
+    expect(SYSTEM_PROMPT).toContain("Good - standard storm cover");
+    expect(SYSTEM_PROMPT).toContain("The risk - claim may fail");
+  });
+
+  it("GROUP_SYNTHESIS_SYSTEM_PROMPT prohibits dash-heavy fragments", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("DASH-FREE STYLE");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("dash-heavy sentence fragments");
+  });
+
+  it("VERDICT_SYNTHESIS_PROMPT prohibits dash-heavy fragments", () => {
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("DASH-FREE STYLE");
+    expect(VERDICT_SYNTHESIS_PROMPT).toContain("dash-heavy sentence fragments");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Clause-type-aware heading guidance in output schema
+// ---------------------------------------------------------------------------
+
+describe("Clause-type-aware heading guidance", () => {
+  it("SYSTEM_PROMPT atFirstGlance schema describes framing-dependent behavior", () => {
+    expect(SYSTEM_PROMPT).toContain("for explanatory: plain paraphrase");
+    expect(SYSTEM_PROMPT).toContain("for contrast: plausible surface assumption");
+    expect(SYSTEM_PROMPT).toContain("for technical: plain-English meaning");
+  });
+
+  it("SYSTEM_PROMPT whatItMeans schema describes framing-dependent behavior", () => {
+    expect(SYSTEM_PROMPT).toContain("for explanatory: practical impact");
+    expect(SYSTEM_PROMPT).toContain("for contrast: the catch");
+    expect(SYSTEM_PROMPT).toContain("for technical: why it matters");
+  });
+
+  it("GROUP_SYNTHESIS atFirstGlance schema describes framing-dependent behavior", () => {
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("for explanatory: plain paraphrase");
+    expect(GROUP_SYNTHESIS_SYSTEM_PROMPT).toContain("for contrast: plausible surface assumption");
+  });
 });

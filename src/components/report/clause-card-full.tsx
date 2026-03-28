@@ -4,7 +4,38 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import type { ClauseCard } from "@/types/report";
+import type { ClauseCard, ClauseFraming } from "@/types/report";
+
+const FRAMING_HEADINGS: Record<
+  ClauseFraming,
+  { firstBox: string; secondBox: string; revealButton: string }
+> = {
+  explanatory: {
+    firstBox: "What this clause says",
+    secondBox: "What this means in practice",
+    revealButton: "See the detail",
+  },
+  contrast: {
+    firstBox: "What many people may assume",
+    secondBox: "What the catch is",
+    revealButton: "Reveal the catch",
+  },
+  technical: {
+    firstBox: "Plain-English meaning",
+    secondBox: "Why this matters",
+    revealButton: "See why this matters",
+  },
+};
+
+const DEFAULT_HEADINGS = {
+  firstBox: "At first glance",
+  secondBox: "What it really means",
+  revealButton: "Reveal the catch",
+};
+
+function getHeadings(framing?: ClauseFraming) {
+  return framing ? FRAMING_HEADINGS[framing] : DEFAULT_HEADINGS;
+}
 
 function Section({
   title,
@@ -33,6 +64,7 @@ interface ClauseCardFullProps {
 export function ClauseCardFull({ clause, startCollapsed }: ClauseCardFullProps) {
   const [revealed, setRevealed] = useState(!startCollapsed);
   const [expanded, setExpanded] = useState(false);
+  const headings = getHeadings(clause.clauseFraming);
 
   if (!revealed) {
     return (
@@ -42,7 +74,7 @@ export function ClauseCardFull({ clause, startCollapsed }: ClauseCardFullProps) 
             <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
               {clause.clauseLabel}
             </p>
-            <Section title="At first glance" bg="bg-muted/20">
+            <Section title={headings.firstBox} bg="bg-muted/20">
               <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
                 {clause.atFirstGlance}
               </p>
@@ -52,7 +84,7 @@ export function ClauseCardFull({ clause, startCollapsed }: ClauseCardFullProps) 
               className="mt-3 flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-primary transition-colors hover:bg-primary/5"
             >
               <ChevronRight className="h-3.5 w-3.5" />
-              Reveal the catch
+              {headings.revealButton}
             </button>
           </div>
         </CardContent>
@@ -73,13 +105,13 @@ export function ClauseCardFull({ clause, startCollapsed }: ClauseCardFullProps) 
         </div>
 
         <div className="space-y-5 px-5 py-6 sm:px-6">
-          <Section title="At first glance" bg="bg-muted/20">
+          <Section title={headings.firstBox} bg="bg-muted/20">
             <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
               {clause.atFirstGlance}
             </p>
           </Section>
 
-          <Section title="What it really means" bg="bg-red-50/50">
+          <Section title={headings.secondBox} bg="bg-red-50/50">
             <p className="max-w-prose text-sm leading-relaxed text-foreground/80">
               {clause.whatItMeans}
             </p>
